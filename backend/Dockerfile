@@ -20,6 +20,7 @@ RUN apk add --no-cache \
     autoconf=2.72-r1 automake=1.17-r1 bash=5.2.37-r0 \
     binutils=2.44-r3 build-base=0.5-r3 ca-certificates=20260611-r0 \
     curl=8.14.1-r3 g++=14.2.0-r6 gcc=14.2.0-r6 git=2.49.1-r0 \
+    libcap-ng=0.8.5-r0 libcap-ng-dev=0.8.5-r0 libcap-ng-static=0.8.5-r0 \
     libtool=2.5.4-r1 linux-headers=6.14.2-r0 m4=1.4.19-r4 \
     make=4.4.1-r3 musl=1.2.5-r12 musl-dev=1.2.5-r12 \
     pax-utils=1.3.8-r1 perl=5.40.4-r0 pkgconf=2.4.3-r0
@@ -91,7 +92,7 @@ RUN cd /src/openvpn \
     && install -m 0755 src/openvpn/openvpn /out/openvpn \
     && strip /out/openvpn /out/awg /out/wg \
     && file /out/* \
-    && ! scanelf -n /out/* | grep -E 'lib(c|m|pthread|wolfssl)\.so'
+    && ! scanelf -n /out/* | grep -E 'lib(c|m|pthread|wolfssl|cap-ng)\.so'
 
 FROM scratch AS binaries
 COPY --from=builder /out/ /

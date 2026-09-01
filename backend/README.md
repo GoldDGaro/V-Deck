@@ -9,7 +9,7 @@ docker build -f backend/Dockerfile --target binaries --output type=local,dest=re
 python scripts/elf_audit.py release/native/*
 ```
 
-Рецепт закрепляет digest Dockerfile frontend и Alpine, Go archive по SHA-256, точные upstream tags и commits из `versions.json`. Сборка проверяет каждый commit до применения локальных патчей. Go-компоненты собираются для `GOOS=linux`, `GOARCH=amd64`; C-компоненты и OpenVPN статически линкуются с musl, а OpenVPN — со статической wolfSSL.
+Рецепт закрепляет digest Dockerfile frontend и Alpine, Go archive по SHA-256, точные upstream tags и commits из `versions.json`. Сборка проверяет каждый commit до применения локальных патчей. Go-компоненты собираются для `GOOS=linux`, `GOARCH=amd64`; C-компоненты и OpenVPN статически линкуются с musl, а OpenVPN — со статическими wolfSSL и libcap-ng.
 
 `amneziawg-go-version.patch` исправляет только отображаемую upstream-версию. Патчи `amneziawg-tools-bundled-uapi.patch` и `wireguard-tools-bundled-uapi.patch` заставляют generic Linux build использовать закреплённые UAPI из соответствующих source tags вместо более старого заголовка ядра сборочной системы. `wolfssl-openvpn-cmake.patch` и `openvpn-static-cmake.patch` являются материалами альтернативной Zig/CMake cross-сборки, использованной для bundled release files.
 
@@ -24,7 +24,7 @@ docker build -f backend/Dockerfile --target binaries --output type=local,dest=re
 python scripts/elf_audit.py release/native/*
 ```
 
-The recipe pins the Dockerfile frontend and Alpine by digest, verifies the Go archive by SHA-256, and checks exact upstream tags and commits from `versions.json` before applying local patches. Go components target `GOOS=linux`, `GOARCH=amd64`; C components and OpenVPN are statically linked with musl, with OpenVPN using static wolfSSL.
+The recipe pins the Dockerfile frontend and Alpine by digest, verifies the Go archive by SHA-256, and checks exact upstream tags and commits from `versions.json` before applying local patches. Go components target `GOOS=linux`, `GOARCH=amd64`; C components and OpenVPN are statically linked with musl, with OpenVPN using static wolfSSL and libcap-ng.
 
 `amneziawg-go-version.patch` changes only the stale upstream version string. The `amneziawg-tools-bundled-uapi.patch` and `wireguard-tools-bundled-uapi.patch` files make generic Linux builds use the pinned UAPI from each source tag instead of an older build-host kernel header. `wolfssl-openvpn-cmake.patch` and `openvpn-static-cmake.patch` are inputs for the alternative Zig/CMake cross-build used for the bundled release files.
 
