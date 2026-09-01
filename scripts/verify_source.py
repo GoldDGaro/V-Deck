@@ -19,6 +19,7 @@ PROJECT_REQUIRED = {
     "V-Deck-source/V-Deck/backend/Dockerfile",
     "V-Deck-source/V-Deck/backend/versions.json",
     "V-Deck-source/V-Deck/backend/amneziawg-go-version.patch",
+    "V-Deck-source/V-Deck/backend/amneziawg-tools-bundled-uapi.patch",
     "V-Deck-source/V-Deck/backend/openvpn-static-cmake.patch",
     "V-Deck-source/V-Deck/backend/wolfssl-openvpn-cmake.patch",
     "V-Deck-source/V-Deck/pnpm-lock.yaml",
