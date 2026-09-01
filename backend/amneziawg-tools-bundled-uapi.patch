@@ -1,3 +1,16 @@
+diff --git a/src/containers.h b/src/containers.h
+--- a/src/containers.h
++++ b/src/containers.h
+@@ -16,8 +16,8 @@
+ #include <sys/socket.h>
+ #include <net/if.h>
+ #include <netinet/in.h>
+ #if defined(__linux__)
+-#include <linux/wireguard.h>
++#include "uapi/linux/linux/wireguard.h"
+ #elif defined(__OpenBSD__)
+ #include <net/if_wg.h>
+ #endif
 diff --git a/src/ipc-linux.h b/src/ipc-linux.h
 --- a/src/ipc-linux.h
 +++ b/src/ipc-linux.h
