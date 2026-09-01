@@ -14,7 +14,7 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
 WORK = PROJECT.parent
-DEFAULT_OUTPUT = WORK.parent / "outputs"
+DEFAULT_OUTPUT = WORK / "outputs"
 EPOCH = (2026, 8, 31, 0, 0, 0)
 NATIVE_NAMES = {"amneziawg-go", "awg", "wireguard-go", "wg", "openvpn"}
 INSTALL_FILES = {
