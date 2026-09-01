@@ -1,5 +1,5 @@
-# syntax=docker/dockerfile:1.7
-FROM alpine:3.22.1 AS builder
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+FROM alpine:3.22.1@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1 AS builder
 
 ARG GO_VERSION=1.25.14
 ARG GO_SHA256=a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712
@@ -17,8 +17,12 @@ ARG OPENVPN_COMMIT=327a33de2aa21883f3d206774c1d0801b244fce6
 ARG WOLFSSL_COMMIT=ac01707f552c611fbd135cc723b2682b3e7f80f2
 
 RUN apk add --no-cache \
-    autoconf automake bash build-base ca-certificates cmake curl git \
-    linux-headers libtool make ninja pax-utils pkgconf python3
+    autoconf=2.72-r1 automake=1.17-r1 bash=5.2.37-r0 \
+    binutils=2.44-r3 build-base=0.5-r3 ca-certificates=20260611-r0 \
+    curl=8.14.1-r3 g++=14.2.0-r6 gcc=14.2.0-r6 git=2.49.1-r0 \
+    libtool=2.5.4-r1 linux-headers=6.14.2-r0 m4=1.4.19-r4 \
+    make=4.4.1-r3 musl=1.2.5-r12 musl-dev=1.2.5-r12 \
+    pax-utils=1.3.8-r1 perl=5.40.4-r0 pkgconf=2.4.3-r0
 
 RUN curl --fail --location --proto '=https' --tlsv1.2 \
       "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz \
@@ -59,10 +63,10 @@ RUN git -C /src/amneziawg-go apply /tmp/amneziawg-go-version.patch \
 
 ENV CGO_ENABLED=1
 RUN make -C /src/amneziawg-tools/src -j"$(nproc)" \
-      CFLAGS='-O3 -fPIE' LDFLAGS='-static -s' WITH_WGQUICK=no WITH_BASHCOMPLETION=no WITH_SYSTEMDUNITS=no \
+      CFLAGS='-O3 -fPIE -DRUNSTATEDIR=\"/run\"' LDFLAGS='-static -s' WITH_WGQUICK=no WITH_BASHCOMPLETION=no WITH_SYSTEMDUNITS=no \
     && install -m 0755 /src/amneziawg-tools/src/wg /out/awg \
     && make -C /src/wireguard-tools/src -j"$(nproc)" \
-      CFLAGS='-O3 -fPIE' LDFLAGS='-static -s' WITH_WGQUICK=no WITH_BASHCOMPLETION=no WITH_SYSTEMDUNITS=no \
+      CFLAGS='-O3 -fPIE -DRUNSTATEDIR=\"/run\"' LDFLAGS='-static -s' WITH_WGQUICK=no WITH_BASHCOMPLETION=no WITH_SYSTEMDUNITS=no \
     && install -m 0755 /src/wireguard-tools/src/wg /out/wg
 
 RUN cd /src/wolfssl \

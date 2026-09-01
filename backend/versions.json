@@ -2,6 +2,13 @@
   "schema": 1,
   "target": "x86_64-linux-musl",
   "toolchains": {
+    "docker": {
+      "frontend": "docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e",
+      "base_image": "alpine:3.22.1@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1",
+      "gcc": "14.2.0-r6",
+      "binutils": "2.44-r3",
+      "musl": "1.2.5-r12"
+    },
     "go": {
       "version": "1.25.14",
       "linux_x86_64_sha256": "a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712",

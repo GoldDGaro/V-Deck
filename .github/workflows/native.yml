@@ -5,20 +5,57 @@ on:
   push:
     paths:
       - "backend/**"
+      - "bin/**"
+      - "scripts/elf_audit.py"
+      - "tests/test_binaries.py"
+      - ".dockerignore"
+      - ".github/workflows/native.yml"
 
 permissions:
   contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build pinned static x86-64 binaries
+      - name: Build pinned Linux x86-64 binaries
         run: docker build --target binaries -f backend/Dockerfile --output type=local,dest=release/native .
-      - run: python3 scripts/elf_audit.py release/native/*
-      - run: sha256sum release/native/*
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10.21"
+      - name: Audit Docker-built and bundled ELF files
+        run: python3 scripts/elf_audit.py release/native/* bin/*
+      - name: Record file and dynamic dependency results
+        shell: bash
+        run: |
+          set -euo pipefail
+          for binary in release/native/* bin/*; do
+            file "$binary"
+            if file "$binary" | grep -q "dynamically linked"; then
+              ldd "$binary"
+            else
+              echo "$binary: no ldd run required (file reports non-dynamic ELF)"
+            fi
+          done
+      - name: Record bundled and Docker-build versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for root in release/native bin; do
+            "$root/amneziawg-go" --version
+            "$root/awg" --version
+            "$root/wireguard-go" --version
+            "$root/wg" --version
+            "$root/openvpn" --version
+          done
+      - name: Verify bundled version manifest and SHA-256 digests
+        env:
+          PYTHONPATH: py_modules
+        run: python3 -m unittest discover -s tests -p "test_binaries.py" -v
+      - name: Record Docker-build SHA-256 digests
+        run: sha256sum release/native/*
       - uses: actions/upload-artifact@v4
         with:
           name: v-deck-native-x86_64

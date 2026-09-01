@@ -90,7 +90,7 @@ sudo nft delete table inet vdeck
 
 ## Сборка и проверки
 
-Требуются Python 3.10+, Node.js 20+, pnpm 9+ и Docker для воспроизводимой Linux-сборки нативных компонентов.
+Для кода плагина требуются Python 3.10+, Node.js 20+ и pnpm 9+. Docker используется только сопровождающими разработчиками и CI для воспроизводимой сборки Linux x86-64 компонентов; пользователю и Steam Deck он не нужен. Go 1.25.14, Zig 0.15.2, upstream tags/commits и release hashes закреплены в `backend/versions.json`.
 
 ```text
 PYTHONPATH=py_modules python -m unittest discover -s tests -v
@@ -102,7 +102,9 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
-docker build -f backend/Dockerfile --output type=local,dest=. .
+docker build -f backend/Dockerfile --target binaries --output type=local,dest=release/native .
+python scripts/elf_audit.py release/native/*
+python scripts/elf_audit.py bin/amneziawg-go bin/awg bin/wireguard-go bin/wg bin/openvpn
 python scripts/build_release.py
 python scripts/verify_release.py ../outputs/V-Deck-v0.1.0.zip
 python scripts/verify_source.py ../outputs/V-Deck-v0.1.0-source.zip
@@ -218,7 +220,7 @@ A future protocol can implement `VPNBackend` and register in one place without a
 
 ## Build and verification
 
-Requirements: Python 3.10+, Node.js 20+, pnpm 9+, and Docker for reproducible Linux native builds.
+Plugin development requires Python 3.10+, Node.js 20+, and pnpm 9+. Docker is used only by maintainers and CI for reproducible Linux x86-64 component builds; users and Steam Deck do not need it. Go 1.25.14, Zig 0.15.2, upstream tags/commits, and release hashes are pinned in `backend/versions.json`.
 
 ```text
 PYTHONPATH=py_modules python -m unittest discover -s tests -v
@@ -230,7 +232,9 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
-docker build -f backend/Dockerfile --output type=local,dest=. .
+docker build -f backend/Dockerfile --target binaries --output type=local,dest=release/native .
+python scripts/elf_audit.py release/native/*
+python scripts/elf_audit.py bin/amneziawg-go bin/awg bin/wireguard-go bin/wg bin/openvpn
 python scripts/build_release.py
 python scripts/verify_release.py ../outputs/V-Deck-v0.1.0.zip
 python scripts/verify_source.py ../outputs/V-Deck-v0.1.0-source.zip
