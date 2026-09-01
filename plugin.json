@@ -1,0 +1,10 @@
+{
+  "name": "V-Deck",
+  "author": "V-Deck contributors",
+  "flags": ["_root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["vpn", "network", "root"],
+    "description": "AmneziaWG, WireGuard, and OpenVPN manager for Steam Deck."
+  }
+}

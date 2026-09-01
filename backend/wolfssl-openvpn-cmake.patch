@@ -1,0 +1,31 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 4ecbf16..5cbe3b5 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -248,6 +248,26 @@ endif()
+ # For reproducible build, gate out from the build anything that might
+ # introduce semantically frivolous jitter, maximizing chance of
+ # identical object files.
++
++# Backport of the upstream CMake OpenVPN integration recipe. wolfSSL 5.9.2's
++# autotools build already exposes --enable-openvpn; this makes the CMake cross
++# build select the same compatibility surface.
++add_option("WOLFSSL_OPENVPN" "Enable OpenVPN support (default: disabled)" "no" "yes;no")
++if(WOLFSSL_OPENVPN)
++    foreach(_o WOLFSSL_AES WOLFSSL_CRL WOLFSSL_DES3 WOLFSSL_DSA WOLFSSL_MD5 WOLFSSL_OCSP)
++        set(${_o} "yes" CACHE BOOL "Required by the OpenVPN integration" FORCE)
++    endforeach()
++    list(APPEND WOLFSSL_DEFINITIONS
++        "-DHAVE_COMP_KEY" "-DHAVE_CRL" "-DHAVE_EX_DATA"
++        "-DHAVE_KEYING_MATERIAL" "-DHAVE_OPENSSL_CMD" "-DOPENSSL_ALL"
++        "-DOPENSSL_EXTRA" "-DSESSION_CERTS" "-DWC_RSA_NO_PADDING"
++        "-DWOLFSSL_AES_COUNTER" "-DWOLFSSL_AES_DIRECT"
++        "-DWOLFSSL_CERT_EXT" "-DWOLFSSL_CERT_GEN"
++        "-DWOLFSSL_CERT_NAME_ALL" "-DWOLFSSL_DES_ECB"
++        "-DWOLFSSL_EITHER_SIDE" "-DWOLFSSL_ERROR_CODE_OPENSSL"
++        "-DWOLFSSL_KEY_GEN" "-DWOLFSSL_OPENVPN"
++        "-DWOLFSSL_TICKET_HAVE_ID")
++endif()
+ add_option("WOLFSSL_REPRODUCIBLE_BUILD"
+     "Enable maximally reproducible build (default: disabled)"
+     "no" "yes;no")

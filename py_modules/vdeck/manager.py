@@ -1,0 +1,294 @@
+"""Serialized single-active-VPN orchestration and recovery state machine."""
+
+from __future__ import annotations
+
+import asyncio
+import re
+from contextlib import suppress
+from typing import Any
+
+from .backends.registry import BackendRegistry
+from .errors import VDeckError, ok
+from .logging_utils import ErrorHistory
+from .models import ConnectionState, DesiredState, PersistentState, RuntimeState
+from .network import FirewallManager, interface_name
+from .runner import OwnedProcess
+from .storage import VDeckStore, utc_now
+
+
+class VPNManager:
+    def __init__(
+        self,
+        store: VDeckStore,
+        registry: BackendRegistry,
+        firewall: FirewallManager,
+        errors: ErrorHistory,
+        recovery_delays: tuple[float, ...] = (0, 3, 10, 30, 60),
+    ):
+        self.store = store
+        self.registry = registry
+        self.firewall = firewall
+        self.errors = errors
+        self.recovery_delays = recovery_delays
+        self.lock = asyncio.Lock()
+        self._recovery_task: asyncio.Task[None] | None = None
+
+    async def initialize(self) -> None:
+        async with self.lock:
+            state = self.store.load_state()
+            runtime = self.store.load_runtime()
+            if runtime.state != ConnectionState.DISCONNECTED.value or runtime.interface or runtime.process:
+                metadata = None
+                if runtime.connection_id:
+                    with suppress(VDeckError):
+                        metadata = self.store.get(runtime.connection_id)
+                if metadata:
+                    try:
+                        await self.registry.get(metadata.protocol).cleanup(metadata, runtime)
+                    except Exception as exc:
+                        self._record_error(metadata.id, metadata.protocol, "crash_cleanup", exc)
+                else:
+                    await self._cleanup_orphaned_runtime(runtime)
+                self.store.save_runtime(RuntimeState())
+                state.active_connection_id = None
+                self.store.save_state(state)
+            await self._cleanup_known_interfaces()
+            if runtime.firewall_active or await self.firewall.active():
+                await self.firewall.disable()
+        state = self.store.load_state()
+        if state.auto_connect and state.desired_state == DesiredState.ON.value and state.last_active_connection_id:
+            with suppress(VDeckError):
+                await self.start(state.last_active_connection_id, user_initiated=False)
+
+    async def start(self, connection_id: str, *, user_initiated: bool = True) -> dict[str, Any]:
+        if self._recovery_task and not self._recovery_task.done() and user_initiated:
+            self._recovery_task.cancel()
+        async with self.lock:
+            metadata = self.store.get(connection_id)
+            if metadata.import_error:
+                raise VDeckError("MIGRATION_IMPORT_FAILED", metadata.import_error)
+            state = self.store.load_state()
+            runtime = self.store.load_runtime()
+            if runtime.state in {
+                ConnectionState.CONNECTING.value,
+                ConnectionState.DISCONNECTING.value,
+                ConnectionState.RECOVERING.value,
+            }:
+                raise VDeckError("OPERATION_IN_PROGRESS", "Another VPN operation is already in progress")
+            if runtime.state == ConnectionState.CONNECTED.value and runtime.connection_id == connection_id:
+                return ok(connection=metadata.to_dict(), runtime=runtime.to_dict())
+            switching = runtime.connection_id is not None and runtime.connection_id != connection_id
+            if switching:
+                old = None
+                with suppress(VDeckError):
+                    old = self.store.get(runtime.connection_id or "")
+                await self._stop_locked(old, runtime, state, manual=False)
+                state = self.store.load_state()
+                runtime = self.store.load_runtime()
+
+            state.desired_state = DesiredState.ON.value
+            state.active_connection_id = connection_id
+            state.last_active_connection_id = connection_id
+            self.store.save_state(state)
+            runtime = RuntimeState(state=ConnectionState.CONNECTING.value, connection_id=connection_id)
+            self.store.save_runtime(runtime)
+            backend = self.registry.get(metadata.protocol)
+            try:
+                status = await backend.start(metadata, runtime)
+                if not status.get("connected"):
+                    raise VDeckError("BACKEND_NOT_CONNECTED", "The VPN backend did not confirm a connected tunnel")
+                runtime = self.store.load_runtime()
+                runtime.state = ConnectionState.CONNECTED.value
+                runtime.connection_id = connection_id
+                runtime.started_at = utc_now()
+                runtime.established_once = True
+                runtime.error_code = None
+                runtime.error_message = None
+                metadata.last_used_at = runtime.started_at
+                metadata.updated_at = runtime.started_at
+                self.store.update_metadata(metadata)
+                if state.kill_switch:
+                    info = self.store.parsed_runtime_info(connection_id)
+                    addresses: list[str] = []
+                    for endpoint in info.get("endpoints", []):
+                        addresses.extend(await backend.context.inspector.resolve_endpoint(str(endpoint)))
+                    await self.firewall.enable(runtime.interface or "", addresses)
+                    runtime.firewall_active = True
+                self.store.save_runtime(runtime)
+                return ok(connection=metadata.to_dict(), runtime=runtime.to_dict(), status=status)
+            except Exception as exc:
+                try:
+                    await backend.cleanup(metadata, runtime)
+                finally:
+                    await self.firewall.disable()
+                runtime = RuntimeState(
+                    state=ConnectionState.ERROR.value,
+                    connection_id=connection_id,
+                    error_code=exc.code if isinstance(exc, VDeckError) else "START_FAILED",
+                    error_message=str(exc),
+                )
+                self.store.save_runtime(runtime)
+                state.active_connection_id = None
+                state.desired_state = DesiredState.OFF.value
+                self.store.save_state(state)
+                self._record_error(connection_id, metadata.protocol, "switch" if switching else "start", exc)
+                if isinstance(exc, VDeckError):
+                    raise
+                raise VDeckError("START_FAILED", "Unable to start the VPN connection") from exc
+
+    async def stop(self, *, manual: bool = True) -> dict[str, Any]:
+        if self._recovery_task and not self._recovery_task.done():
+            self._recovery_task.cancel()
+        async with self.lock:
+            state = self.store.load_state()
+            runtime = self.store.load_runtime()
+            metadata = None
+            if runtime.connection_id:
+                with suppress(VDeckError):
+                    metadata = self.store.get(runtime.connection_id)
+            await self._stop_locked(metadata, runtime, state, manual=manual)
+            return ok(runtime=self.store.load_runtime().to_dict())
+
+    async def _stop_locked(self, metadata: Any, runtime: RuntimeState, state: PersistentState, *, manual: bool) -> None:
+        if manual:
+            state.desired_state = DesiredState.OFF.value
+            self.store.save_state(state)
+        runtime.state = ConnectionState.DISCONNECTING.value
+        self.store.save_runtime(runtime)
+        try:
+            if metadata:
+                await self.registry.get(metadata.protocol).stop(metadata, runtime)
+            else:
+                await self._cleanup_orphaned_runtime(runtime)
+        finally:
+            await self.firewall.disable()
+            state.active_connection_id = None
+            if manual:
+                state.desired_state = DesiredState.OFF.value
+            self.store.save_state(state)
+            self.store.save_runtime(RuntimeState())
+
+    async def _cleanup_orphaned_runtime(self, runtime: RuntimeState) -> None:
+        """Remove only resources carrying V-Deck ownership markers."""
+        protocols = self.registry.protocols()
+        if not protocols:
+            return
+        context = self.registry.get(protocols[0]).context
+        await context.routes.cleanup(runtime.owned_routes)
+        if runtime.interface and re.fullmatch(r"vdeck-[0-9a-f]{8}", runtime.interface):
+            await context.dns.cleanup(runtime.interface)
+            await context.runner.run(["ip", "link", "delete", "dev", runtime.interface], check=False, timeout=5)
+        if runtime.process:
+            with suppress(KeyError, TypeError, ValueError):
+                await context.runner.stop(OwnedProcess.from_dict(runtime.process))
+
+    async def _cleanup_known_interfaces(self) -> None:
+        """Clean stale interfaces only when their UUID prefix belongs to a stored V-Deck connection."""
+        protocols = self.registry.protocols()
+        if not protocols:
+            return
+        context = self.registry.get(protocols[0]).context
+        for metadata in self.store.list():
+            owned_interface = interface_name(metadata.id)
+            if await context.inspector.interface_exists(owned_interface):
+                await context.dns.cleanup(owned_interface)
+                await context.runner.run(["ip", "link", "delete", "dev", owned_interface], check=False, timeout=5)
+
+    async def delete(self, connection_id: str) -> dict[str, Any]:
+        state = self.store.load_state()
+        runtime = self.store.load_runtime()
+        if runtime.connection_id == connection_id or state.active_connection_id == connection_id:
+            await self.stop(manual=True)
+        async with self.lock:
+            self.store.delete(connection_id)
+            state = self.store.load_state()
+            if state.last_active_connection_id == connection_id:
+                state.last_active_connection_id = None
+                self.store.save_state(state)
+        return ok()
+
+    async def health_check(self) -> None:
+        runtime = self.store.load_runtime()
+        state = self.store.load_state()
+        if runtime.state != ConnectionState.CONNECTED.value or state.desired_state != DesiredState.ON.value:
+            return
+        try:
+            metadata = self.store.get(runtime.connection_id or "")
+            status = await self.registry.get(metadata.protocol).status(metadata, runtime)
+        except Exception:
+            status = {"connected": False}
+        if not status.get("connected") and (not self._recovery_task or self._recovery_task.done()):
+            self._recovery_task = asyncio.create_task(self._recover(runtime.connection_id or ""))
+
+    async def network_event(self) -> None:
+        state = self.store.load_state()
+        runtime = self.store.load_runtime()
+        if (
+            state.desired_state == DesiredState.ON.value
+            and runtime.connection_id
+            and (not self._recovery_task or self._recovery_task.done())
+        ):
+            self._recovery_task = asyncio.create_task(self._recover(runtime.connection_id))
+
+    async def _recover(self, connection_id: str) -> None:
+        metadata = self.store.get(connection_id)
+        for attempt, delay in enumerate(self.recovery_delays, 1):
+            if delay:
+                await asyncio.sleep(delay)
+            async with self.lock:
+                state = self.store.load_state()
+                runtime = self.store.load_runtime()
+                if state.desired_state != DesiredState.ON.value or runtime.connection_id != connection_id:
+                    return
+                runtime.state = ConnectionState.RECOVERING.value
+                runtime.recovery_attempt = attempt
+                self.store.save_runtime(runtime)
+                backend = self.registry.get(metadata.protocol)
+                try:
+                    await backend.stop(metadata, runtime)
+                    status = await backend.start(metadata, runtime)
+                    if not status.get("connected"):
+                        raise VDeckError("RECOVERY_NOT_CONNECTED", "Recovery did not confirm the tunnel")
+                    runtime = self.store.load_runtime()
+                    runtime.state = ConnectionState.CONNECTED.value
+                    runtime.connection_id = connection_id
+                    runtime.started_at = utc_now()
+                    runtime.established_once = True
+                    runtime.recovery_attempt = 0
+                    if state.kill_switch:
+                        info = self.store.parsed_runtime_info(connection_id)
+                        addresses: list[str] = []
+                        for endpoint in info.get("endpoints", []):
+                            addresses.extend(await backend.context.inspector.resolve_endpoint(str(endpoint)))
+                        await self.firewall.enable(runtime.interface or "", addresses)
+                        runtime.firewall_active = True
+                    self.store.save_runtime(runtime)
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._record_error(connection_id, metadata.protocol, "recover", exc)
+        async with self.lock:
+            runtime = self.store.load_runtime()
+            runtime.state = ConnectionState.ERROR.value
+            runtime.error_code = "RECOVERY_EXHAUSTED"
+            runtime.error_message = "Automatic recovery attempts were exhausted"
+            self.store.save_runtime(runtime)
+
+    def _record_error(self, connection_id: str, protocol: str, operation: str, exc: Exception) -> None:
+        self.errors.append(
+            {
+                "timestamp": utc_now(),
+                "connection": connection_id,
+                "protocol": protocol,
+                "operation": operation,
+                "summary": str(exc),
+            }
+        )
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "settings": self.store.load_state().to_dict(),
+            "runtime": self.store.load_runtime().to_dict(),
+            "connections": [item.to_dict() for item in self.store.list()],
+        }
