@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
 import tempfile
@@ -34,12 +35,19 @@ def re_sub_separators(value: str) -> str:
 
 
 class VDeckStore:
-    def __init__(self, root: Path, runtime_root: Path | None = None, logs_root: Path | None = None):
+    def __init__(
+        self,
+        root: Path,
+        runtime_root: Path | None = None,
+        logs_root: Path | None = None,
+        logger: logging.Logger | None = None,
+    ):
         self.root = root
         self.configs = root / "configs"
         self.state_dir = root / "state"
         self.runtime = runtime_root or root / "runtime"
         self.logs = logs_root or root / "logs"
+        self.logger = logger
         self.reports = root / "reports"
         for directory in (root, self.configs, self.state_dir, self.runtime, self.logs, self.reports):
             secure_mkdir(directory)
@@ -116,7 +124,23 @@ class VDeckStore:
         passphrase: str | None = None,
         migration_source: str | None = None,
     ) -> ConnectionMetadata:
-        parsed = parse_config(protocol, source_path)
+        if self.logger:
+            self.logger.info("parser started protocol=%s source=%s", protocol.value, source_path)
+        try:
+            parsed = parse_config(protocol, source_path)
+        except Exception as exc:
+            if self.logger:
+                code = exc.code if isinstance(exc, VDeckError) else type(exc).__name__
+                self.logger.warning(
+                    "parser failed protocol=%s source=%s code=%s error=%s",
+                    protocol.value,
+                    source_path,
+                    code,
+                    exc,
+                )
+            raise
+        if self.logger:
+            self.logger.info("parser succeeded protocol=%s source=%s", protocol.value, source_path)
         connection_id = str(uuid.uuid4())
         created = utc_now()
         name = (display_name or display_name_from_path(source_path)).strip()
@@ -134,6 +158,8 @@ class VDeckStore:
             migration_source=migration_source,
         )
         stage = Path(tempfile.mkdtemp(prefix=f".{connection_id}.", dir=self.configs))
+        if self.logger:
+            self.logger.info("storage stage created connection=%s stage=%s", connection_id, stage)
         try:
             secure_mkdir(stage / "files")
             secure_mkdir(stage / "credentials")
@@ -153,7 +179,16 @@ class VDeckStore:
                 },
             )
             os.replace(stage, self.connection_dir(connection_id))
-        except Exception:
+            if self.logger:
+                self.logger.info(
+                    "connection committed connection=%s directory=%s",
+                    connection_id,
+                    self.connection_dir(connection_id),
+                )
+        except Exception as exc:
+            if self.logger:
+                code = exc.code if isinstance(exc, VDeckError) else type(exc).__name__
+                self.logger.warning("connection commit failed connection=%s code=%s error=%s", connection_id, code, exc)
             shutil.rmtree(stage, ignore_errors=True)
             raise
         return metadata

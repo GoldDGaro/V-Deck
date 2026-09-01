@@ -27,7 +27,8 @@ import {
   updateSettings,
   validateImport,
 } from "./api";
-import { rpcErrorMessage, t, type Language, type TranslationKey } from "./i18n";
+import { displayRpcError, t, type Language, type TranslationKey } from "./i18n";
+import { pickerRpcPaths, snapshotContainsConnection } from "./import-flow";
 import {
   connectionStatus,
   formatBytes,
@@ -98,10 +99,24 @@ function statusKey(status: string): TranslationKey {
   return values[status] ?? "disconnected";
 }
 
-function ensureSuccess(response: RpcResponse, language: Language = "en"): void {
+class DisplayedRpcError extends Error {}
+
+function ensureSuccess(
+  response: RpcResponse,
+  language: Language = "en",
+  heading: TranslationKey = "genericError",
+): void {
   if (!response.success) {
-    throw new Error(rpcErrorMessage(language, response.code, response.message));
+    throw new DisplayedRpcError(displayRpcError(language, response, heading));
   }
+}
+
+function unexpectedImportError(
+  language: Language,
+  code:
+    "VALIDATE_IMPORT_RPC_FAILED" | "IMPORT_RPC_FAILED" | "IMPORT_NOT_VISIBLE",
+): string {
+  return `${t(language, "importFailed")}\n${code}`;
 }
 
 function VDeckContent(): React.ReactElement {
@@ -155,6 +170,7 @@ function VDeckContent(): React.ReactElement {
   const beginImport = async (nextProtocol: Protocol) => {
     setProtocol(nextProtocol);
     setError("");
+    console.info("[V-Deck import] protocol selected", nextProtocol);
     const extensions =
       nextProtocol === "amneziawg"
         ? ["conf", "vpn"]
@@ -166,46 +182,98 @@ function VDeckContent(): React.ReactElement {
         FileSelectionType.FILE,
         "/home/deck/Downloads",
         true,
-        false,
+        true,
         undefined,
         extensions,
         false,
         false,
-        1,
       );
-      const path = picked.realpath || picked.path;
-      const checked = await validateImport(nextProtocol, path);
-      ensureSuccess(checked, language);
-      setFilePath(path);
+      const [pickedPath, pickedRealpath] = pickerRpcPaths(picked);
+      console.info("[V-Deck import] file selected", {
+        path: pickedPath,
+        realpath: pickedRealpath,
+      });
+      console.info("[V-Deck import] validate_import started", nextProtocol);
+      const checked = await validateImport(
+        nextProtocol,
+        pickedPath,
+        pickedRealpath,
+      );
+      ensureSuccess(checked, language, "validationFailed");
+      console.info("[V-Deck import] validate_import succeeded", nextProtocol);
+      setFilePath(checked.path);
       setValidation(checked);
       setName(checked.display_name);
       setPage("import");
     } catch (reason: unknown) {
       if (typeof reason === "string" && reason.toLowerCase().includes("cancel"))
         return;
-      setError(reason instanceof Error ? reason.message : String(reason));
+      console.error("[V-Deck import] validate_import failed", reason);
+      const message =
+        reason instanceof DisplayedRpcError
+          ? reason.message
+          : unexpectedImportError(language, "VALIDATE_IMPORT_RPC_FAILED");
+      setError(message);
+      toaster.toast({
+        title: t(language, "importFailed"),
+        body: message,
+        critical: true,
+      });
     }
   };
 
-  const importSelected = () =>
-    run(
-      () =>
-        importConnection(
-          protocol,
-          filePath,
-          name,
-          username,
-          password,
-          passphrase,
-        ),
-      () => {
-        toaster.toast({ title: "V-Deck", body: t(language, "imported") });
-        setPage("main");
-        setUsername("");
-        setPassword("");
-        setPassphrase("");
-      },
-    );
+  const importSelected = async () => {
+    setBusy(true);
+    setError("");
+    console.info("[V-Deck import] import_connection started", protocol);
+    try {
+      const response = await importConnection(
+        protocol,
+        filePath,
+        name,
+        username,
+        password,
+        passphrase,
+      );
+      ensureSuccess(response, language, "importFailed");
+      if (!response.connection?.id) {
+        throw new DisplayedRpcError(
+          unexpectedImportError(language, "IMPORT_RPC_FAILED"),
+        );
+      }
+      const refreshed = await getSnapshot();
+      ensureSuccess(refreshed, language, "importFailed");
+      if (!snapshotContainsConnection(refreshed, response.connection.id)) {
+        throw new DisplayedRpcError(
+          unexpectedImportError(language, "IMPORT_NOT_VISIBLE"),
+        );
+      }
+      console.info("[V-Deck import] import_connection succeeded", {
+        id: response.connection.id,
+        protocol: response.connection.protocol,
+      });
+      setSnapshot(refreshed);
+      toaster.toast({ title: "V-Deck", body: t(language, "imported") });
+      setPage("main");
+      setUsername("");
+      setPassword("");
+      setPassphrase("");
+    } catch (reason: unknown) {
+      console.error("[V-Deck import] import_connection failed", reason);
+      const message =
+        reason instanceof DisplayedRpcError
+          ? reason.message
+          : unexpectedImportError(language, "IMPORT_RPC_FAILED");
+      setError(message);
+      toaster.toast({
+        title: t(language, "importFailed"),
+        body: message,
+        critical: true,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const openDiagnostics = async (connection: Connection) => {
     setSelected(connection);
@@ -224,7 +292,14 @@ function VDeckContent(): React.ReactElement {
 
   const errorView = error ? (
     <PanelSectionRow>
-      <div style={{ ...cardStyle, color: "#ff9d9d", overflowWrap: "anywhere" }}>
+      <div
+        style={{
+          ...cardStyle,
+          color: "#ff9d9d",
+          overflowWrap: "anywhere",
+          whiteSpace: "pre-wrap",
+        }}
+      >
         {error}
       </div>
     </PanelSectionRow>
@@ -304,7 +379,7 @@ function VDeckContent(): React.ReactElement {
             <ButtonItem
               layout="below"
               disabled={busy || !name.trim()}
-              onClick={importSelected}
+              onClick={() => void importSelected()}
             >
               {t(language, "import")}
             </ButtonItem>

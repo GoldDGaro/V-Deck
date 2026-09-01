@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,7 @@ from .models import ConnectionState, Protocol
 from .network import DnsManager, FirewallManager, NetworkInspector, RouteManager
 from .parsers import parse_config
 from .runner import CommandRunner
-from .security import sanitize
+from .security import ensure_regular_file, sanitize
 from .storage import VDeckStore, display_name_from_path
 
 
@@ -32,8 +33,18 @@ class VDeckService:
         runtime_root: Path | None = None,
         logs_root: Path | None = None,
     ):
-        self.store = VDeckStore(storage_root, runtime_root, logs_root)
-        self.logger = create_logger(self.store.logs)
+        effective_logs_root = logs_root or storage_root / "logs"
+        self.logger = create_logger(effective_logs_root)
+        self.store = VDeckStore(storage_root, runtime_root, effective_logs_root, self.logger)
+        self._last_snapshot_connection_count: int | None = None
+        effective_uid = getattr(os, "geteuid", lambda: None)()
+        self.logger.info(
+            "runtime storage initialized settings_dir=%s runtime_dir=%s logs_dir=%s uid=%s",
+            self.store.root,
+            self.store.runtime,
+            self.store.logs,
+            effective_uid,
+        )
         self.errors = ErrorHistory(self.store.state_dir / "errors.json")
         self.runner = CommandRunner()
         self.binaries = BinaryManager(plugin_root / "bin")
@@ -116,6 +127,10 @@ class VDeckService:
 
     async def get_snapshot(self) -> dict[str, Any]:
         result = self.manager.snapshot()
+        connection_count = len(result["connections"])
+        if connection_count != self._last_snapshot_connection_count:
+            self.logger.info("snapshot contains %d connections", connection_count)
+            self._last_snapshot_connection_count = connection_count
         result["backend_versions"] = self.binaries.versions()
         result["resolved_language"] = resolve_language(result["settings"]["language"])
         return ok(**result)
@@ -130,37 +145,108 @@ class VDeckService:
         passphrase: str = "",
     ) -> dict[str, Any]:
         async def operation() -> dict[str, Any]:
+            self.logger.info("import_connection started protocol=%s source=%s", protocol, path)
             try:
-                selected = Protocol(protocol)
-            except ValueError as exc:
-                raise VDeckError("PROTOCOL_INVALID", "Unsupported VPN protocol") from exc
-            metadata = self.store.import_connection(
-                selected,
-                Path(path),
-                display_name or None,
-                username or None,
-                password if username else None,
-                passphrase or None,
+                selected = self._protocol(protocol)
+                source = self._accessible_import_path(path)
+                metadata = self.store.import_connection(
+                    selected,
+                    source,
+                    display_name or None,
+                    username or None,
+                    password if username else None,
+                    passphrase or None,
+                )
+                committed = self.store.get(metadata.id)
+                connections = self.store.list()
+                connection_count = len(connections)
+                if not any(item.id == metadata.id for item in connections):
+                    raise VDeckError(
+                        "IMPORT_COMMIT_NOT_VISIBLE",
+                        "The imported connection was committed but is not visible in storage",
+                    )
+            except Exception as exc:
+                self.logger.warning(
+                    "import_connection failed protocol=%s source=%s code=%s error=%s",
+                    protocol,
+                    path,
+                    self._error_code(exc),
+                    exc,
+                )
+                raise
+            self.logger.info(
+                "import_connection succeeded connection=%s protocol=%s connections=%d",
+                committed.id,
+                committed.protocol,
+                connection_count,
             )
-            return ok(connection=metadata.to_dict())
+            return ok(connection=committed.to_dict(), connections_count=connection_count)
 
         return await self._rpc(operation)
 
-    async def validate_import(self, protocol: str, path: str) -> dict[str, Any]:
+    async def validate_import(self, protocol: str, path: str, realpath: str = "") -> dict[str, Any]:
         async def operation() -> dict[str, Any]:
+            self.logger.info("file selected path=%s realpath=%s", path, realpath or "[not provided]")
+            self.logger.info("protocol selected protocol=%s", protocol)
+            self.logger.info("validate_import started protocol=%s", protocol)
             try:
-                selected = Protocol(protocol)
-            except ValueError as exc:
-                raise VDeckError("PROTOCOL_INVALID", "Unsupported VPN protocol") from exc
-            source = Path(path)
-            parsed = parse_config(selected, source)
+                selected = self._protocol(protocol)
+                source = self._accessible_import_path(realpath, path)
+                parsed = parse_config(selected, source)
+            except Exception as exc:
+                self.logger.warning(
+                    "validate_import failed protocol=%s code=%s error=%s",
+                    protocol,
+                    self._error_code(exc),
+                    exc,
+                )
+                raise
+            self.logger.info("validate_import succeeded protocol=%s source=%s", selected.value, source)
             return ok(
+                path=str(source),
                 display_name=display_name_from_path(source),
                 requires_username_password=parsed.requires_username_password,
                 requires_key_passphrase=parsed.requires_key_passphrase,
             )
 
         return await self._rpc(operation)
+
+    @staticmethod
+    def _protocol(value: str) -> Protocol:
+        try:
+            return Protocol(value)
+        except ValueError as exc:
+            raise VDeckError("PROTOCOL_INVALID", "Unsupported VPN protocol") from exc
+
+    @staticmethod
+    def _accessible_import_path(*values: str) -> Path:
+        seen: set[str] = set()
+        semantic_error: VDeckError | None = None
+        for raw in values:
+            value = str(raw or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            try:
+                source = ensure_regular_file(Path(value))
+                with source.open("rb") as stream:
+                    stream.read(1)
+                return source
+            except VDeckError as exc:
+                if exc.code in {"CONFIG_EMPTY", "CONFIG_TOO_LARGE"}:
+                    semantic_error = semantic_error or exc
+            except OSError:
+                continue
+        if semantic_error:
+            raise semantic_error
+        raise VDeckError(
+            "CONFIG_FILE_NOT_ACCESSIBLE",
+            "The selected configuration file is not accessible to V-Deck",
+        )
+
+    @staticmethod
+    def _error_code(exc: Exception) -> str:
+        return exc.code if isinstance(exc, VDeckError) else type(exc).__name__
 
     async def connect(self, connection_id: str) -> dict[str, Any]:
         return await self._rpc(lambda: self.manager.start(connection_id))

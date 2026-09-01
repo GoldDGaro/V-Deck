@@ -55,12 +55,14 @@ export interface RpcResponse {
   code: string;
   message?: string;
   connection?: Connection;
+  connections_count?: number;
   path?: string;
 }
 
 export type SnapshotResponse = RpcResponse & Snapshot;
 
 export interface ImportValidation extends RpcResponse {
+  path: string;
   display_name: string;
   requires_username_password: boolean;
   requires_key_passphrase: boolean;

@@ -9,7 +9,7 @@ import type {
 
 export const getSnapshot = callable<[], SnapshotResponse>("get_snapshot");
 export const validateImport = callable<
-  [protocol: Protocol, path: string],
+  [protocol: Protocol, path: string, realpath: string],
   ImportValidation
 >("validate_import");
 export const importConnection = callable<

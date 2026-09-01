@@ -21,9 +21,12 @@ class Plugin:
 
     async def _main(self) -> None:
         fallback_root = Path(decky.DECKY_USER_HOME) / ".local" / "share" / "v-deck"
-        storage_root = Path(getattr(decky, "DECKY_PLUGIN_SETTINGS_DIR", fallback_root))
-        runtime_root = Path(getattr(decky, "DECKY_PLUGIN_RUNTIME_DIR", storage_root / "runtime"))
-        logs_root = Path(getattr(decky, "DECKY_PLUGIN_LOG_DIR", storage_root / "logs"))
+        settings_value = str(getattr(decky, "DECKY_PLUGIN_SETTINGS_DIR", "") or "").strip()
+        storage_root = Path(settings_value) if settings_value else fallback_root
+        runtime_value = str(getattr(decky, "DECKY_PLUGIN_RUNTIME_DIR", "") or "").strip()
+        runtime_root = Path(runtime_value) if runtime_value else storage_root / "runtime"
+        logs_value = str(getattr(decky, "DECKY_PLUGIN_LOG_DIR", "") or "").strip()
+        logs_root = Path(logs_value) if logs_value else storage_root / "logs"
         legacy_root = Path(decky.DECKY_USER_HOME) / ".local" / "share" / "vpn-deck" / "configs"
         self.service = VDeckService(storage_root, PLUGIN_ROOT, legacy_root, runtime_root, logs_root)
         await self.service.initialize()
@@ -49,8 +52,8 @@ class Plugin:
     ) -> dict[str, Any]:
         return await self.service.import_connection(protocol, path, display_name, username, password, passphrase)
 
-    async def validate_import(self, protocol: str, path: str) -> dict[str, Any]:
-        return await self.service.validate_import(protocol, path)
+    async def validate_import(self, protocol: str, path: str, realpath: str = "") -> dict[str, Any]:
+        return await self.service.validate_import(protocol, path, realpath)
 
     async def connect(self, connection_id: str) -> dict[str, Any]:
         return await self.service.connect(connection_id)

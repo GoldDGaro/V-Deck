@@ -1,7 +1,7 @@
 {
   "name": "V-Deck",
   "author": "V-Deck contributors",
-  "flags": ["_root"],
+  "flags": ["root"],
   "api_version": 1,
   "publish": {
     "tags": ["vpn", "network", "root"],

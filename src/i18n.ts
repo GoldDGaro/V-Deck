@@ -23,6 +23,8 @@ const translations = {
     passphrase: "Private-key passphrase",
     import: "Import",
     imported: "VPN imported",
+    importFailed: "Failed to import configuration",
+    fileNotAccessible: "The selected configuration file is not accessible",
     reportSaved: "Diagnostic report saved",
     autoConnect: "Auto-connect",
     killSwitch: "Kill Switch",
@@ -85,6 +87,8 @@ const translations = {
     passphrase: "Пароль приватного ключа",
     import: "Импортировать",
     imported: "VPN импортирован",
+    importFailed: "Не удалось импортировать конфигурацию",
+    fileNotAccessible: "Выбранный файл конфигурации недоступен",
     reportSaved: "Диагностический отчёт сохранён",
     autoConnect: "Автоподключение",
     killSwitch: "Kill Switch",
@@ -144,6 +148,7 @@ const stableErrorKeys: Record<string, TranslationKey> = {
   ENDPOINT_RESOLVE_FAILED: "networkSetupFailed",
   INTERFACE_CREATE_FAILED: "networkSetupFailed",
   COMMAND_FAILED: "networkSetupFailed",
+  CONFIG_FILE_NOT_ACCESSIBLE: "fileNotAccessible",
 };
 
 export function rpcErrorMessage(
@@ -160,4 +165,17 @@ export function rpcErrorMessage(
     key = "invalidConfig";
   }
   return key ? t(language, key) : fallback || t(language, "genericError");
+}
+
+export function displayRpcError(
+  language: Language,
+  response: { code?: string; message?: string },
+  heading: TranslationKey = "genericError",
+): string {
+  const code = response.code || "RPC_FAILED";
+  const title = t(language, heading);
+  const detail = rpcErrorMessage(language, code, response.message);
+  return [title, code, detail]
+    .filter((value, index, values) => value && values.indexOf(value) === index)
+    .join("\n");
 }
