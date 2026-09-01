@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rpcErrorMessage, t } from "./i18n";
+import { displayRpcError, rpcErrorMessage, t } from "./i18n";
 
 describe("localization", () => {
   it("has distinct Russian and English strings", () => {
@@ -17,6 +17,18 @@ describe("localization", () => {
     ).toBe("Ошибка аутентификации VPN");
     expect(rpcErrorMessage("en", "CONFIG_MALFORMED")).toBe(
       "The VPN configuration is invalid or unsupported",
+    );
+  });
+
+  it("always exposes the stable error code for import failures", () => {
+    expect(
+      displayRpcError(
+        "ru",
+        { code: "CONFIG_FILE_NOT_ACCESSIBLE" },
+        "importFailed",
+      ),
+    ).toBe(
+      "Не удалось импортировать конфигурацию\nCONFIG_FILE_NOT_ACCESSIBLE\nВыбранный файл конфигурации недоступен",
     );
   });
 });

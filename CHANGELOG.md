@@ -11,3 +11,4 @@
 - Added endpoint IP caching and narrowly scoped temporary DNS recovery rules so hostname endpoints recover under Kill Switch without opening ordinary traffic.
 - Separated same-boot plugin restart recovery from cold-boot auto-connect by recording the Linux boot ID in runtime state.
 - Added nftables ownership markers and refusal-to-delete behavior for an unrelated table named `vdeck`.
+- Fixed the Steam Deck import blocker by enabling Decky's real `root` flag, preserving both file-picker paths across RPC, validating backend accessibility, surfacing stable import error codes, and logging the complete sanitized import lifecycle.

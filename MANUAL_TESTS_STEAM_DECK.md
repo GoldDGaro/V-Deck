@@ -22,6 +22,16 @@
 
 **Failure data to collect:** фото/видео экрана, разрешение, язык, точная последовательность фокуса.
 
+### Блокирующий сценарий импорта WG/AWG
+
+**Prerequisites:** один рабочий WireGuard `.conf` и один рабочий AmneziaWG `.conf` в `/home/deck/Downloads` или вложенной папке.
+
+**Steps:** Add VPN → WireGuard или AmneziaWG → перейти к файлу → нажать на строку файла → проверить имя → Import.
+
+**Expected result:** профиль сразу появляется в главном списке. Ошибка выбора/доступа/parser/storage остаётся на экране и в toast вместе со стабильным code, например `CONFIG_FILE_NOT_ACCESSIBLE`; «ничего не произошло» недопустимо.
+
+**Failure data to collect:** `path`/`realpath`, protocol, error code и `DECKY_PLUGIN_LOG_DIR/vdeck.log`. Не прикладывать config, PrivateKey, PresharedKey или passwords.
+
 ## 3. Миграция из vpn-deck
 
 **Prerequisites:** рабочая старая конфигурация в `~/.local/share/vpn-deck/configs`; backup каталога.

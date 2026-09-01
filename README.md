@@ -43,7 +43,7 @@ V-Deck — приватно тестируемый плагин Decky Loader д�
 4. Перезапустите Decky Loader и откройте V-Deck в Quick Access Menu.
 5. Импортируйте тестовый профиль без реальных секретов либо профиль, предназначенный для контролируемого тестирования.
 
-Плагин запрашивает флаг Decky `_root`: без повышенных привилегий Linux не позволяет создавать туннельные интерфейсы, назначать маршруты, управлять `nftables` и настраивать DNS отдельного интерфейса.
+Плагин запрашивает флаг Decky `root`: без повышенных привилегий Linux не позволяет создавать туннельные интерфейсы, назначать маршруты, управлять `nftables` и настраивать DNS отдельного интерфейса. Подчёркнутый шаблонный флаг `_root` не включает повышенные права в Decky Loader.
 
 ## Основной сценарий
 
@@ -53,6 +53,8 @@ V-Deck — приватно тестируемый плагин Decky Loader д�
 4. Включите подключение. V-Deck запускает backend, проверяет интерфейс и маршруты, применяет DNS и только после успешного соединения может активировать kill switch.
 5. Откройте диагностику, чтобы проверить handshake, прохождение трафика, маршрутизацию и DNS.
 6. Выключение вручную сохраняется и не отменяется автоматически после перезагрузки или смены сети.
+
+V-Deck передаёт backend оба значения Decky File Picker (`path` и `realpath`) и использует первый реально доступный обычный файл. Ошибка выбора, parser или записи профиля всегда отображается в UI вместе со стабильным error code. Безопасная техническая последовательность импорта сохраняется в `DECKY_PLUGIN_LOG_DIR/vdeck.log` без ключей, паролей или содержимого конфигурации.
 
 ## Безопасность и приватность
 
@@ -173,7 +175,7 @@ All five release executables are static x86-64 ELF64 files without a dynamic loa
 4. Restart Decky Loader and open V-Deck from the Quick Access menu.
 5. Import a synthetic profile or one intended for controlled testing.
 
-The plugin requests Decky's `_root` flag because Linux tunnel interfaces, routes, `nftables`, and per-link DNS cannot be managed by the unprivileged `deck` user.
+The plugin requests Decky's `root` flag because Linux tunnel interfaces, routes, `nftables`, and per-link DNS cannot be managed by the unprivileged `deck` user. The template placeholder `_root` does not enable elevated privileges in Decky Loader.
 
 ## Basic workflow
 
@@ -183,6 +185,8 @@ The plugin requests Decky's `_root` flag because Linux tunnel interfaces, routes
 4. Turn the connection on. V-Deck starts the backend, verifies the interface and routes, applies DNS, and can activate the kill switch only after a successful connection.
 5. Open diagnostics to inspect handshake, traffic proof, routing, and DNS.
 6. Manual OFF persists and is not silently undone after a reboot or network change.
+
+V-Deck passes both Decky File Picker values (`path` and `realpath`) to the backend and uses the first accessible regular file. Picker, parser, or storage failures are always shown in the UI with a stable error code. The sanitized technical import lifecycle is written to `DECKY_PLUGIN_LOG_DIR/vdeck.log` without keys, passwords, or configuration contents.
 
 ## Security and privacy
 

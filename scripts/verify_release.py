@@ -72,6 +72,8 @@ def verify(path: Path) -> None:
         package = json.loads(archive.read("V-Deck/package.json"))
         if plugin.get("name") != "V-Deck" or package.get("version") != "0.1.0":
             errors.append("plugin/package identity mismatch")
+        if "root" not in plugin.get("flags", []) or "_root" in plugin.get("flags", []):
+            errors.append("Decky root runtime flag is missing or disabled")
         license_text = archive.read("V-Deck/LICENSE").decode("utf-8")
         if not license_text.startswith("# Polyform Noncommercial License 1.0.0"):
             errors.append("unrecognized root license text")
