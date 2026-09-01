@@ -84,7 +84,8 @@ RUN cd /src/openvpn \
     && PKG_CONFIG_PATH=/opt/vdeck/lib/pkgconfig ./configure \
        --with-crypto-library=wolfssl --disable-shared --enable-static \
        --disable-dco --disable-lzo --disable-lz4 --disable-pkcs11 \
-       --disable-plugin-auth-pam --disable-selinux --disable-systemd \
+       --disable-plugin-auth-pam --disable-plugin-down-root \
+       --disable-selinux --disable-systemd \
        WOLFSSL_CFLAGS='-I/opt/vdeck/include -I/opt/vdeck/include/wolfssl' \
        WOLFSSL_LIBS='-lwolfssl -lm' \
        CFLAGS='-O2 -fPIE' LDFLAGS='-static -L/opt/vdeck/lib' \
