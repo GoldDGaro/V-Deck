@@ -34,9 +34,23 @@ class VPNManager:
         self._recovery_task: asyncio.Task[None] | None = None
 
     async def initialize(self) -> None:
+        restart_connection_id: str | None = None
+        restart_endpoint_cache: dict[str, list[str]] = {}
+        current_boot_id = self.store.current_boot_id()
         async with self.lock:
             state = self.store.load_state()
             runtime = self.store.load_runtime()
+            if (
+                state.desired_state == DesiredState.ON.value
+                and runtime.established_once
+                and runtime.connection_id
+                and current_boot_id is not None
+                and runtime.boot_id == current_boot_id
+            ):
+                with suppress(VDeckError):
+                    self.store.get(runtime.connection_id)
+                    restart_connection_id = runtime.connection_id
+                    restart_endpoint_cache = runtime.endpoint_cache
             if runtime.state != ConnectionState.DISCONNECTED.value or runtime.interface or runtime.process:
                 metadata = None
                 if runtime.connection_id:
@@ -55,8 +69,25 @@ class VPNManager:
             await self._cleanup_known_interfaces()
             if runtime.firewall_active or await self.firewall.active():
                 await self.firewall.disable()
+            if restart_connection_id:
+                self.store.save_runtime(
+                    RuntimeState(
+                        state=ConnectionState.ERROR.value,
+                        connection_id=restart_connection_id,
+                        established_once=True,
+                        boot_id=current_boot_id,
+                        endpoint_cache=restart_endpoint_cache,
+                    )
+                )
         state = self.store.load_state()
-        if state.auto_connect and state.desired_state == DesiredState.ON.value and state.last_active_connection_id:
+        if restart_connection_id:
+            runtime = self.store.load_runtime()
+            metadata = self.store.get(restart_connection_id)
+            backend = self.registry.get(metadata.protocol)
+            if state.kill_switch:
+                await self._enable_kill_switch(backend, metadata, runtime)
+            self._recovery_task = asyncio.create_task(self._recover(restart_connection_id))
+        elif state.auto_connect and state.desired_state == DesiredState.ON.value and state.last_active_connection_id:
             with suppress(VDeckError):
                 await self.start(state.last_active_connection_id, user_initiated=False)
 
@@ -90,7 +121,11 @@ class VPNManager:
             state.active_connection_id = connection_id
             state.last_active_connection_id = connection_id
             self.store.save_state(state)
-            runtime = RuntimeState(state=ConnectionState.CONNECTING.value, connection_id=connection_id)
+            runtime = RuntimeState(
+                state=ConnectionState.CONNECTING.value,
+                connection_id=connection_id,
+                boot_id=self.store.current_boot_id(),
+            )
             self.store.save_runtime(runtime)
             backend = self.registry.get(metadata.protocol)
             try:
@@ -108,12 +143,7 @@ class VPNManager:
                 metadata.updated_at = runtime.started_at
                 self.store.update_metadata(metadata)
                 if state.kill_switch:
-                    info = self.store.parsed_runtime_info(connection_id)
-                    addresses: list[str] = []
-                    for endpoint in info.get("endpoints", []):
-                        addresses.extend(await backend.context.inspector.resolve_endpoint(str(endpoint)))
-                    await self.firewall.enable(runtime.interface or "", addresses)
-                    runtime.firewall_active = True
+                    await self._enable_kill_switch(backend, metadata, runtime)
                 self.store.save_runtime(runtime)
                 return ok(connection=metadata.to_dict(), runtime=runtime.to_dict(), status=status)
             except Exception as exc:
@@ -214,10 +244,11 @@ class VPNManager:
             return
         try:
             metadata = self.store.get(runtime.connection_id or "")
-            status = await self.registry.get(metadata.protocol).status(metadata, runtime)
+            status = await self.registry.get(metadata.protocol).health(metadata, runtime)
         except Exception:
-            status = {"connected": False}
-        if not status.get("connected") and (not self._recovery_task or self._recovery_task.done()):
+            status = {"connected": False, "healthy": False}
+        healthy = bool(status.get("healthy", status.get("connected")))
+        if not healthy and (not self._recovery_task or self._recovery_task.done()):
             self._recovery_task = asyncio.create_task(self._recover(runtime.connection_id or ""))
 
     async def network_event(self) -> None:
@@ -242,6 +273,7 @@ class VPNManager:
                     return
                 runtime.state = ConnectionState.RECOVERING.value
                 runtime.recovery_attempt = attempt
+                runtime.boot_id = self.store.current_boot_id()
                 self.store.save_runtime(runtime)
                 backend = self.registry.get(metadata.protocol)
                 try:
@@ -255,24 +287,51 @@ class VPNManager:
                     runtime.started_at = utc_now()
                     runtime.established_once = True
                     runtime.recovery_attempt = 0
+                    state.active_connection_id = connection_id
+                    state.last_active_connection_id = connection_id
+                    self.store.save_state(state)
                     if state.kill_switch:
-                        info = self.store.parsed_runtime_info(connection_id)
-                        addresses: list[str] = []
-                        for endpoint in info.get("endpoints", []):
-                            addresses.extend(await backend.context.inspector.resolve_endpoint(str(endpoint)))
-                        await self.firewall.enable(runtime.interface or "", addresses)
-                        runtime.firewall_active = True
+                        await self._enable_kill_switch(backend, metadata, runtime)
                     self.store.save_runtime(runtime)
                     return
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     self._record_error(connection_id, metadata.protocol, "recover", exc)
+                    if state.kill_switch and attempt < len(self.recovery_delays):
+                        try:
+                            await self._refresh_endpoint_cache(backend, metadata, runtime)
+                        except Exception as refresh_exc:
+                            self._record_error(
+                                connection_id,
+                                metadata.protocol,
+                                "endpoint_refresh",
+                                refresh_exc,
+                            )
         async with self.lock:
             runtime = self.store.load_runtime()
             runtime.state = ConnectionState.ERROR.value
             runtime.error_code = "RECOVERY_EXHAUSTED"
             runtime.error_message = "Automatic recovery attempts were exhausted"
+            self.store.save_runtime(runtime)
+
+    async def _enable_kill_switch(self, backend: Any, metadata: Any, runtime: RuntimeState) -> None:
+        if not backend.endpoint_addresses(runtime):
+            await backend.resolve_endpoint_cache(metadata, runtime)
+        await self.firewall.enable(runtime.interface or "", backend.endpoint_addresses(runtime))
+        runtime.firewall_active = True
+        self.store.save_runtime(runtime)
+
+    async def _refresh_endpoint_cache(self, backend: Any, metadata: Any, runtime: RuntimeState) -> None:
+        cached_addresses = backend.endpoint_addresses(runtime)
+        dns_addresses = await backend.context.inspector.system_dns_servers()
+        await self.firewall.enable(runtime.interface or "", cached_addresses, dns_addresses)
+        try:
+            await backend.resolve_endpoint_cache(metadata, runtime, force=True)
+        finally:
+            restored_addresses = backend.endpoint_addresses(runtime) or cached_addresses
+            await self.firewall.enable(runtime.interface or "", restored_addresses)
+            runtime.firewall_active = True
             self.store.save_runtime(runtime)
 
     def _record_error(self, connection_id: str, protocol: str, operation: str, exc: Exception) -> None:
@@ -287,8 +346,11 @@ class VPNManager:
         )
 
     def snapshot(self) -> dict[str, Any]:
+        runtime = self.store.load_runtime().to_dict()
+        runtime.pop("boot_id", None)
+        runtime.pop("endpoint_cache", None)
         return {
             "settings": self.store.load_state().to_dict(),
-            "runtime": self.store.load_runtime().to_dict(),
+            "runtime": runtime,
             "connections": [item.to_dict() for item in self.store.list()],
         }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import shlex
 import socket
 from contextlib import suppress
 from pathlib import Path
@@ -47,6 +48,32 @@ def _management_request(port: int, password: str, command: str, timeout: float =
         return "".join(chunks)
 
 
+def resolved_openvpn_config(text: str, endpoint_cache: dict[str, list[str]]) -> str:
+    rendered: list[str] = []
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith(("#", ";", "<")):
+            rendered.append(raw)
+            continue
+        try:
+            tokens = shlex.split(stripped, posix=True)
+        except ValueError:
+            rendered.append(raw)
+            continue
+        if tokens and tokens[0].lower().removeprefix("--") == "remote" and len(tokens) >= 2:
+            addresses = endpoint_cache.get(tokens[1], [])
+            if addresses:
+                # Preserve OpenVPN comments instead of turning them into quoted arguments.
+                comment_at = next((index for index, token in enumerate(tokens) if token.startswith(("#", ";"))), None)
+                directive = tokens if comment_at is None else tokens[:comment_at]
+                comment = "" if comment_at is None else " " + " ".join(tokens[comment_at:])
+                directive[1] = addresses[0]
+                rendered.append(shlex.join(directive) + comment)
+                continue
+        rendered.append(raw)
+    return "\n".join(rendered).rstrip() + "\n"
+
+
 class OpenVPNBackend(VPNBackend):
     protocol_id = "openvpn"
 
@@ -58,6 +85,7 @@ class OpenVPNBackend(VPNBackend):
 
     async def start(self, metadata: ConnectionMetadata, runtime: RuntimeState) -> dict[str, Any]:
         directory = self.connection_dir(metadata)
+        endpoint_cache = await self.resolve_endpoint_cache(metadata, runtime)
         credentials = directory / "credentials"
         if metadata.requires_username_password and not (credentials / "auth").is_file():
             raise VDeckError("CREDENTIALS_REQUIRED", "OpenVPN username and password are required")
@@ -70,11 +98,16 @@ class OpenVPNBackend(VPNBackend):
         port = _reserve_port()
         management_password = secrets.token_urlsafe(24)
         password_file = management_dir / "management-password"
+        resolved_config = management_dir / "resolved.conf"
         secure_write(password_file, (management_password + "\n").encode())
+        secure_write(
+            resolved_config,
+            resolved_openvpn_config((directory / "config").read_text(encoding="utf-8"), endpoint_cache).encode("utf-8"),
+        )
         args = self.context.binaries.command(
             "openvpn",
             "--config",
-            str(directory / "config"),
+            str(resolved_config),
             "--cd",
             str(directory),
             "--dev",
@@ -164,6 +197,8 @@ class OpenVPNBackend(VPNBackend):
         password_file = Path(str(management.get("password_file", "")))
         if password_file.name == "management-password":
             password_file.unlink(missing_ok=True)
+        if metadata:
+            (self.context.store.runtime / metadata.id / "resolved.conf").unlink(missing_ok=True)
         runtime.process = {}
         runtime.interface = None
         runtime.owned_routes = []

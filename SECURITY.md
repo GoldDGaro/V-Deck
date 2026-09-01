@@ -8,7 +8,7 @@ The plugin runs with elevated privileges. Network cleanup is therefore ownership
 
 - interface names must match `vdeck-[0-9a-f]{8}`;
 - routes are created and deleted with protocol marker `186`;
-- firewall rules live only in `table inet vdeck` and carry V-Deck comments;
+- firewall rules live only in `table inet vdeck`, whose ownership comment is verified before replacement or deletion;
 - DNS is changed and reverted per V-Deck interface;
 - processes are stopped only when PID, executable, and Linux process start time still match.
 
@@ -22,7 +22,7 @@ Until a project security contact is published, report privately to the release m
 
 ## Operational recovery
 
-If networking is unexpectedly blocked, manually switch the active connection OFF. V-Deck then deletes only its `inet vdeck` table and owned tunnel resources. As a last-resort local recovery from Desktop Mode:
+If networking is unexpectedly blocked, manually switch the active connection OFF. V-Deck deletes `inet vdeck` only when its ownership marker is present, together with other owned tunnel resources. As a last-resort local recovery from Desktop Mode:
 
 ```text
 sudo nft delete table inet vdeck
