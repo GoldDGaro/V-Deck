@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: python3 scripts/elf_audit.py bin/*
+      - run: python3 scripts/fetch_sources.py
+      - run: python3 scripts/build_release.py
+      - run: python3 scripts/verify_release.py ../outputs/V-Deck-v0.1.0.zip
+      - run: python3 scripts/verify_source.py ../outputs/V-Deck-v0.1.0-source.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ../outputs/V-Deck-v0.1.0.zip
+            ../outputs/V-Deck-v0.1.0-source.zip
+            ../outputs/SHA256SUMS.txt
+            ../outputs/release-manifest.json
+          generate_release_notes: true

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+release/
+third_party_src/
+*.zip
+*.py[cod]
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage/
+reports/
+*.log
+.DS_Store

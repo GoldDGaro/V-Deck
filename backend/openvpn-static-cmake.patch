@@ -1,0 +1,90 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c92d9ea..86b8ed7 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -12,7 +12,7 @@ project(openvpn)
+ # and OpenSSL having version 1.1.1+ and generally does not offer the same
+ # configurability like autoconf
+ 
+-find_package(PkgConfig REQUIRED)
++find_package(PkgConfig QUIET)
+ include(CheckSymbolExists)
+ include(CheckIncludeFiles)
+ include(CheckCCompilerFlag)
+@@ -157,9 +157,9 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL "Android" OR ${FAKE_ANDROID})
+ elseif (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+     set(TARGET_LINUX YES)
+     set(ENABLE_ASYNC_PUSH YES)
+-    set(ENABLE_LINUXDCO YES)
+     set(ENABLE_SITNL YES)
+-    set(ENABLE_DCO YES)
++    set(ENABLE_LINUXDCO NO)
++    set(ENABLE_DCO NO)
+ elseif (${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD")
+     set(TARGET_FREEBSD YES)
+     set(ENABLE_DCO YES)
+@@ -325,9 +325,10 @@ function(add_library_deps target)
+ 
+         target_link_libraries(${target} PRIVATE -lmbedtls -lmbedx509 -lmbedcrypto)
+     elseif (${WOLFSSL})
+-        pkg_search_module(wolfssl wolfssl REQUIRED)
+-        target_link_libraries(${target} PUBLIC ${wolfssl_LINK_LIBRARIES})
+-        target_include_directories(${target} PRIVATE ${wolfssl_INCLUDE_DIRS}/wolfssl)
++        find_package(wolfssl CONFIG REQUIRED)
++        target_link_libraries(${target} PUBLIC wolfssl::wolfssl)
++        target_include_directories(${target} PRIVATE ${WOLFSSL_ROOT}/include/wolfssl)
++        target_compile_definitions(${target} PRIVATE EXTERNAL_OPTS_OPENVPN)
+     else ()
+         find_package(OpenSSL REQUIRED)
+         target_link_libraries(${target} PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+@@ -353,7 +354,7 @@ function(add_library_deps target)
+         $<TARGET_NAME_IF_EXISTS:PkgConfig::pkcs11-helper>
+         )
+ 
+-    if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
++    if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux" AND ENABLE_DCO)
+         pkg_search_module(libcapng REQUIRED libcap-ng IMPORTED_TARGET)
+         pkg_search_module(libnl REQUIRED libnl-genl-3.0 IMPORTED_TARGET)
+ 
+diff --git a/src/openvpn/options.c b/src/openvpn/options.c
+index 0c86c71..0a81b4a 100644
+--- a/src/openvpn/options.c
++++ b/src/openvpn/options.c
+@@ -113,7 +113,7 @@ const char title_string[] = PACKAGE_STRING
+     " [DCO]"
+ #endif
+ #ifdef CONFIGURE_GIT_REVISION
+-    " built on " __DATE__
++    " reproducible build"
+ #endif
+     ;
+ 
+diff --git a/src/openvpn/ssl_openssl.c b/src/openvpn/ssl_openssl.c
+index d796627..9385a87 100644
+--- a/src/openvpn/ssl_openssl.c
++++ b/src/openvpn/ssl_openssl.c
+@@ -317,8 +317,10 @@ cert_verify_callback(X509_STORE_CTX *ctx, void *arg)
+     session = SSL_get_ex_data(ssl, mydata_index);
+     ASSERT(session);
+ 
+-    /* Configure CRLs. */
++    /* Configure CRLs. wolfSSL 5.9.2 loads them into the certificate store. */
++#ifndef ENABLE_CRYPTO_WOLFSSL
+     X509_STORE_CTX_set0_crls(ctx, session->opt->ssl_ctx->crls);
++#endif
+     return X509_verify_cert(ctx);
+ }
+ 
+@@ -1456,6 +1458,12 @@ backend_tls_ctx_reload_crl(struct tls_root_ctx *ssl_ctx, const char *crl_file, b
+         {
+             crypto_msg(M_FATAL, "CRL: cannot add CRL to list");
+         }
++#ifdef ENABLE_CRYPTO_WOLFSSL
++        if (X509_STORE_add_crl(store, crl) != 1)
++        {
++            crypto_msg(M_FATAL, "CRL: cannot add CRL to wolfSSL certificate store");
++        }
++#endif
+         num_crls_loaded++;
+     }
+     msg(M_INFO, "CRL: loaded %d CRLs from file %s", num_crls_loaded, crl_file);

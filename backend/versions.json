@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "target": "x86_64-linux-musl",
+  "toolchains": {
+    "go": {
+      "version": "1.25.14",
+      "linux_x86_64_sha256": "a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712",
+      "windows_x86_64_sha256": "119044a92b3987c341cd6aebb256676dd4780d292f7b4e72a3e9976677841697"
+    },
+    "zig": {
+      "version": "0.15.2",
+      "windows_x86_64_sha256": "3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c"
+    }
+  },
+  "sources": {
+    "amneziawg-go": {
+      "tag": "v3.1.20260828",
+      "commit": "b5928efb6ca19f0153958460c3d141f04abc5c2e"
+    },
+    "amneziawg-tools": {
+      "tag": "v3.1.20260812",
+      "commit": "ee0f0a9aa34ff0a0da4b3433b9512781cfe02843"
+    },
+    "wireguard-go": {
+      "tag": "0.0.20250522",
+      "commit": "f333402bd9cbe0f3eeb02507bd14e23d7d639280"
+    },
+    "wireguard-tools": {
+      "tag": "v1.0.20260223",
+      "commit": "49ce333da02056ae7b22ee2aeb6afe8aaed79b19"
+    },
+    "openvpn": {
+      "tag": "v2.7.6",
+      "commit": "327a33de2aa21883f3d206774c1d0801b244fce6"
+    },
+    "wolfssl": {
+      "tag": "v5.9.2-stable",
+      "commit": "ac01707f552c611fbd135cc723b2682b3e7f80f2"
+    }
+  },
+  "components": {
+    "amneziawg-go": {
+      "version": "v3.1.20260828-vdeck.1",
+      "binary_sha256": "1bcfbc0e24e431d20e284699d8a9b4acd22df8072c6731707699f7b009d65eaa"
+    },
+    "awg": {
+      "version": "v3.1.20260812",
+      "binary_sha256": "3ff472d58270c938a95693e56a93961ae145ae4d2242d5adca900956707ca92d"
+    },
+    "wireguard-go": {
+      "version": "0.0.20250522",
+      "binary_sha256": "0fbe1b8f2a145b928a070b067e3c34ade18bcf85ce1b745a1536fe5ad4404cb3"
+    },
+    "wg": {
+      "version": "v1.0.20260223",
+      "binary_sha256": "b6ee639f351efab943b77fd29b511c0823bd37d4a5aa9bdc27a239d884c2d348"
+    },
+    "openvpn": {
+      "version": "2.7.6 + wolfSSL 5.9.2",
+      "binary_sha256": "b8deac04bd47817a2227674f1768b0cff4d4a658eef9195b43c756639cccbd26"
+    }
+  }
+}
