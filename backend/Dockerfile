@@ -86,8 +86,8 @@ RUN cd /src/openvpn \
        --disable-dco --disable-lzo --disable-lz4 --disable-pkcs11 \
        --disable-plugin-auth-pam --disable-selinux --disable-systemd \
        WOLFSSL_CFLAGS='-I/opt/vdeck/include -I/opt/vdeck/include/wolfssl' \
-       WOLFSSL_LIBS='/opt/vdeck/lib/libwolfssl.a -lm' \
-       CFLAGS='-O2 -fPIE' LDFLAGS='-static' \
+       WOLFSSL_LIBS='-lwolfssl -lm' \
+       CFLAGS='-O2 -fPIE' LDFLAGS='-static -L/opt/vdeck/lib' \
     && make -j"$(nproc)" \
     && install -m 0755 src/openvpn/openvpn /out/openvpn \
     && strip /out/openvpn /out/awg /out/wg \
