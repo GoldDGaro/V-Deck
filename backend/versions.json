@@ -48,7 +48,7 @@
   },
   "components": {
     "amneziawg-go": {
-      "version": "v3.1.20260828-vdeck.1",
+      "version": "v3.1.20260828",
       "binary_sha256": "1bcfbc0e24e431d20e284699d8a9b4acd22df8072c6731707699f7b009d65eaa"
     },
     "awg": {
