@@ -1,0 +1,18 @@
+diff --git a/src/ipc-linux.h b/src/ipc-linux.h
+--- a/src/ipc-linux.h
++++ b/src/ipc-linux.h
+@@ -13,7 +13,7 @@
+ #include <linux/if_link.h>
+ #include <linux/netlink.h>
+ #include <linux/rtnetlink.h>
+-#include <linux/wireguard.h>
++#include "uapi/linux/linux/wireguard.h"
+ #include <netinet/in.h>
+ #include "containers.h"
+ #include "encoding.h"
+@@ -21,5 +21,4 @@
+ #include "netlink.h"
+ #include "type.h"
+-#include "uapi/linux/linux/wireguard.h"
+ 
+ #define IPC_SUPPORTS_KERNEL_INTERFACE
