@@ -1,0 +1,10 @@
+diff --git a/src/openvpn/Makefile.am b/src/openvpn/Makefile.am
+--- a/src/openvpn/Makefile.am
++++ b/src/openvpn/Makefile.am
+@@ -153,5 +153,6 @@ openvpn_SOURCES = \
+ 	win32-util.h win32-util.c \
+ 	cryptoapi.h cryptoapi.c
++openvpn_LDFLAGS = -all-static
+ openvpn_LDADD = \
+ 	$(top_builddir)/src/compat/libcompat.la \
+ 	$(SOCKETS_LIBS) \

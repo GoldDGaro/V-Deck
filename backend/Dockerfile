@@ -54,10 +54,12 @@ COPY backend/amneziawg-go-version.patch /tmp/amneziawg-go-version.patch
 COPY backend/amneziawg-tools-bundled-uapi.patch /tmp/amneziawg-tools-bundled-uapi.patch
 COPY backend/wireguard-tools-bundled-uapi.patch /tmp/wireguard-tools-bundled-uapi.patch
 COPY backend/openvpn-static-cmake.patch /tmp/openvpn-static-cmake.patch
+COPY backend/openvpn-static-autotools.patch /tmp/openvpn-static-autotools.patch
 RUN git -C /src/amneziawg-go apply /tmp/amneziawg-go-version.patch \
     && git -C /src/amneziawg-tools apply /tmp/amneziawg-tools-bundled-uapi.patch \
     && git -C /src/wireguard-tools apply /tmp/wireguard-tools-bundled-uapi.patch \
     && git -C /src/openvpn apply /tmp/openvpn-static-cmake.patch \
+    && git -C /src/openvpn apply /tmp/openvpn-static-autotools.patch \
     && mkdir -p /out \
     && cd /src/amneziawg-go \
     && go build -tags unix -trimpath -ldflags='-s -w' -o /out/amneziawg-go . \

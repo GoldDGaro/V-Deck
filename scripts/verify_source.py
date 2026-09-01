@@ -23,6 +23,7 @@ PROJECT_REQUIRED = {
     "V-Deck-source/V-Deck/backend/amneziawg-tools-bundled-uapi.patch",
     "V-Deck-source/V-Deck/backend/wireguard-tools-bundled-uapi.patch",
     "V-Deck-source/V-Deck/backend/openvpn-static-cmake.patch",
+    "V-Deck-source/V-Deck/backend/openvpn-static-autotools.patch",
     "V-Deck-source/V-Deck/backend/wolfssl-openvpn-cmake.patch",
     "V-Deck-source/V-Deck/pnpm-lock.yaml",
     "V-Deck-source/V-Deck/requirements-dev.txt",
