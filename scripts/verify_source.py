@@ -17,6 +17,7 @@ REPOSITORIES = {
 }
 PROJECT_REQUIRED = {
     "V-Deck-source/V-Deck/backend/Dockerfile",
+    "V-Deck-source/V-Deck/backend/README.md",
     "V-Deck-source/V-Deck/backend/versions.json",
     "V-Deck-source/V-Deck/backend/amneziawg-go-version.patch",
     "V-Deck-source/V-Deck/backend/amneziawg-tools-bundled-uapi.patch",

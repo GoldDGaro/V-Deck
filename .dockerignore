@@ -1,0 +1,13 @@
+.git
+.github
+node_modules
+dist
+release
+outputs
+research
+third_party_src
+__pycache__
+.mypy_cache
+.ruff_cache
+*.zip
+*.log

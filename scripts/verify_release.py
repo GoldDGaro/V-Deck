@@ -32,6 +32,11 @@ REQUIRED = {
 }
 NATIVE = ("amneziawg-go", "awg", "wireguard-go", "wg", "openvpn")
 FORBIDDEN_PARTS = {".git", "node_modules", "tests", "__pycache__", ".mypy_cache", ".ruff_cache"}
+RUNTIME_FORBIDDEN = {
+    "V-Deck/.dockerignore",
+    "V-Deck/backend/Dockerfile",
+    "V-Deck/docker-compose.yml",
+}
 SECRET_PATTERNS = {
     "WireGuard private key": re.compile(rb"(?im)^\s*PrivateKey\s*=\s*[A-Za-z0-9+/]{43}=\s*$"),
     "password assignment": re.compile(rb'(?i)["\'](?:password|passphrase)["\']\s*:\s*["\'][^"\']{4,}["\']'),
@@ -61,6 +66,7 @@ def verify(path: Path) -> None:
             if any(part in FORBIDDEN_PARTS for part in pure.parts):
                 errors.append(f"forbidden release content: {name}")
         errors.extend(f"missing {name}" for name in sorted(REQUIRED - set(names)))
+        errors.extend(f"build-only file in install archive: {name}" for name in sorted(RUNTIME_FORBIDDEN & set(names)))
 
         plugin = json.loads(archive.read("V-Deck/plugin.json"))
         package = json.loads(archive.read("V-Deck/package.json"))

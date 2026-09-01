@@ -1,12 +1,31 @@
-# Native binary build
+# Native binary build / Сборка нативных бинарников
 
-`Dockerfile` builds five x86_64 Linux executables on pinned Alpine 3.22.1. Go archives are checksum-verified; upstream repositories are checked out at the exact tags/commits in `versions.json`. C tools and OpenVPN are statically linked against musl. OpenVPN uses wolfSSL's official `--enable-openvpn` compatibility recipe; LZO, LZ4, PKCS#11, DCO, PAM plugin, systemd, and SELinux integrations are disabled because Steam Deck receives one self-contained plugin executable.
+## Русский
+
+Docker используется только сопровождающими разработчиками и GitHub Actions для воспроизводимой сборки пяти Linux x86-64 компонентов. Он не запускается V-Deck, не входит в установочный ZIP и не требуется пользователю или Steam Deck.
 
 ```text
 docker build -f backend/Dockerfile --target binaries --output type=local,dest=release/native .
 python scripts/elf_audit.py release/native/*
 ```
 
-The Windows development build used pinned Zig 0.15.2 for cross-compilation and the included CMake patches. The Docker recipe uses upstream autotools integration where available. Both paths compile the same tagged source and feature set; byte hashes can differ because compilers/build paths differ. Release hashes are authoritative in `versions.json`.
+Рецепт закрепляет digest Dockerfile frontend и Alpine, Go archive по SHA-256, точные upstream tags и commits из `versions.json`. Сборка проверяет каждый commit до применения локальных патчей. Go-компоненты собираются для `GOOS=linux`, `GOARCH=amd64`; C-компоненты и OpenVPN статически линкуются с musl, а OpenVPN — со статической wolfSSL.
 
-The amneziawg-go tag contains a stale upstream version string; `amneziawg-go-version.patch` changes only the reported string to the checked-out tag. `wolfssl-openvpn-cmake.patch` backports the integration block already present upstream after 5.9.2, matching the tag's existing `./configure --enable-openvpn` recipe. `openvpn-static-cmake.patch` removes DCO-only dependencies and uses the installed static wolfSSL CMake target for the Zig cross-build.
+`amneziawg-go-version.patch` исправляет только отображаемую upstream-версию. `amneziawg-tools-bundled-uapi.patch` заставляет generic Linux build использовать закреплённый AWG UAPI вместо системного WireGuard UAPI. `wolfssl-openvpn-cmake.patch` и `openvpn-static-cmake.patch` являются материалами альтернативной Zig/CMake cross-сборки, использованной для bundled release files.
+
+Docker CI и bundled binaries могут иметь разные byte hashes из-за разных компиляторов и build paths. Для bundled-файлов авторитетны SHA-256 в `versions.json`; CI отдельно проверяет их ELF-структуру, архитектуру, отсутствие interpreter/`DT_NEEDED` и manifest hashes.
+
+## English
+
+Docker is used only by maintainers and GitHub Actions to reproducibly build five Linux x86-64 components. V-Deck never runs Docker, the installer ZIP does not contain it, and neither users nor Steam Deck need Docker.
+
+```text
+docker build -f backend/Dockerfile --target binaries --output type=local,dest=release/native .
+python scripts/elf_audit.py release/native/*
+```
+
+The recipe pins the Dockerfile frontend and Alpine by digest, verifies the Go archive by SHA-256, and checks exact upstream tags and commits from `versions.json` before applying local patches. Go components target `GOOS=linux`, `GOARCH=amd64`; C components and OpenVPN are statically linked with musl, with OpenVPN using static wolfSSL.
+
+`amneziawg-go-version.patch` changes only the stale upstream version string. `amneziawg-tools-bundled-uapi.patch` makes generic Linux builds use the pinned AWG UAPI instead of the system WireGuard UAPI. `wolfssl-openvpn-cmake.patch` and `openvpn-static-cmake.patch` are inputs for the alternative Zig/CMake cross-build used for the bundled release files.
+
+Docker CI and bundled binaries may have different byte hashes because they use different compilers and build paths. SHA-256 values in `versions.json` are authoritative for bundled files; CI independently verifies their ELF structure, architecture, absence of an interpreter/`DT_NEEDED`, and manifest hashes.
