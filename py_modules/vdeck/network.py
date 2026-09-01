@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
 import socket
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from typing import Any
 
 from .errors import VDeckError
 from .runner import CommandRunner
+
+LOGGER = logging.getLogger(__name__)
 
 
 def interface_name(connection_id: str) -> str:
@@ -21,6 +24,10 @@ def interface_name(connection_id: str) -> str:
 
 def endpoint_host(value: str) -> str:
     value = value.strip()
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        pass
     if value.startswith("["):
         return value[1 : value.find("]")]
     return value.rsplit(":", 1)[0]
@@ -54,6 +61,22 @@ class NetworkInspector:
             )
         except socket.gaierror as exc:
             raise VDeckError("ENDPOINT_RESOLVE_FAILED", f"Unable to resolve VPN endpoint: {host}") from exc
+
+    async def system_dns_servers(self) -> list[str]:
+        """Read current resolver destinations without performing an external lookup."""
+        result = await self.runner.run(["resolvectl", "dns"], check=False, timeout=3)
+        if result.returncode != 0:
+            return []
+        servers: list[str] = []
+        for token in re.split(r"\s+", result.stdout):
+            candidate = token.strip("[](),")
+            try:
+                address = str(ipaddress.ip_address(candidate.split("%", 1)[0]))
+            except ValueError:
+                continue
+            if not ipaddress.ip_address(address).is_loopback and address not in servers:
+                servers.append(address)
+        return servers
 
     async def route_to(self, address: str) -> tuple[str | None, str | None]:
         family = "-6" if ipaddress.ip_address(address).version == 6 else "-4"
@@ -94,12 +117,20 @@ class RouteManager:
         self.runner = runner
         self.inspector = inspector
 
-    async def apply(self, interface: str, allowed_ips: list[str], endpoints: list[str]) -> list[RouteRecord]:
+    async def apply(
+        self,
+        interface: str,
+        allowed_ips: list[str],
+        endpoints: list[str],
+        endpoint_addresses: list[str] | None = None,
+    ) -> list[RouteRecord]:
         records: list[RouteRecord] = []
-        endpoint_addresses: list[str] = []
-        for endpoint in endpoints:
-            endpoint_addresses.extend(await self.inspector.resolve_endpoint(endpoint))
-        for address in endpoint_addresses:
+        resolved_addresses = endpoint_addresses
+        if resolved_addresses is None:
+            resolved_addresses = []
+            for endpoint in endpoints:
+                resolved_addresses.extend(await self.inspector.resolve_endpoint(endpoint))
+        for address in dict.fromkeys(resolved_addresses):
             gateway, device = await self.inspector.route_to(address)
             family = ipaddress.ip_address(address).version
             prefix = f"{address}/{'128' if family == 6 else '32'}"
@@ -161,32 +192,73 @@ class DnsManager:
 
 class FirewallManager:
     TABLE = "vdeck"
+    OWNER_MARKER = "vdeck-owned:org.vdeck:v1"
+    LEGACY_MARKER = 'comment "vdeck-owned"'
 
     def __init__(self, runner: CommandRunner):
         self.runner = runner
 
-    async def enable(self, interface: str, endpoint_addresses: list[str]) -> None:
-        lines = [
-            "add table inet vdeck",
+    async def _table_state(self) -> str:
+        result = await self.runner.run(["nft", "list", "table", "inet", self.TABLE], check=False, timeout=3)
+        if result.returncode != 0:
+            return "absent"
+        current = f'comment "{self.OWNER_MARKER}"'
+        if current in result.stdout or self.LEGACY_MARKER in result.stdout:
+            return "owned"
+        return "foreign"
+
+    async def enable(
+        self,
+        interface: str,
+        endpoint_addresses: list[str],
+        recovery_dns_addresses: list[str] | None = None,
+    ) -> None:
+        table_state = await self._table_state()
+        if table_state == "foreign":
+            raise VDeckError(
+                "FIREWALL_OWNERSHIP_CONFLICT",
+                "A firewall table named vdeck exists without the V-Deck ownership marker",
+            )
+        if interface and not re.fullmatch(r"vdeck-[0-9a-f]{8}", interface):
+            raise VDeckError("FIREWALL_INTERFACE_INVALID", "Refusing to create firewall rules for an unknown interface")
+        lines = []
+        if table_state == "owned":
+            lines.append("delete table inet vdeck")
+        lines += [
+            f'add table inet vdeck {{ comment "{self.OWNER_MARKER}"; }}',
             "add chain inet vdeck output { type filter hook output priority -100; policy accept; }",
-            'add rule inet vdeck output oifname "lo" accept comment "vdeck-owned"',
-            'add rule inet vdeck output ct state established,related accept comment "vdeck-owned"',
-            f'add rule inet vdeck output oifname "{interface}" accept comment "vdeck-owned"',
+            f'add rule inet vdeck output oifname "lo" accept comment "{self.OWNER_MARKER}"',
+            f'add rule inet vdeck output ct state established,related accept comment "{self.OWNER_MARKER}"',
         ]
-        for address in endpoint_addresses:
+        if interface:
+            lines.append(f'add rule inet vdeck output oifname "{interface}" accept comment "{self.OWNER_MARKER}"')
+        for address in dict.fromkeys(endpoint_addresses):
             family = ipaddress.ip_address(address).version
             selector = "ip6 daddr" if family == 6 else "ip daddr"
             lines.append(f'add rule inet vdeck output {selector} {address} accept comment "vdeck-endpoint"')
+        for address in dict.fromkeys(recovery_dns_addresses or []):
+            family = ipaddress.ip_address(address).version
+            selector = "ip6 daddr" if family == 6 else "ip daddr"
+            for protocol in ("udp", "tcp"):
+                lines.append(
+                    f"add rule inet vdeck output {selector} {address} {protocol} dport 53 "
+                    'accept comment "vdeck-recovery-dns"'
+                )
         lines += [
             'add rule inet vdeck output meta nfproto ipv4 reject comment "vdeck-killswitch"',
             'add rule inet vdeck output meta nfproto ipv6 reject comment "vdeck-killswitch"',
         ]
-        await self.disable()
         await self.runner.run(["nft", "-f", "-"], input_text="\n".join(lines) + "\n", timeout=5)
 
-    async def disable(self) -> None:
+    async def disable(self) -> bool:
+        table_state = await self._table_state()
+        if table_state == "absent":
+            return False
+        if table_state == "foreign":
+            LOGGER.warning("Refusing to delete unowned nftables table inet vdeck")
+            return False
         await self.runner.run(["nft", "delete", "table", "inet", self.TABLE], check=False, timeout=5)
+        return True
 
     async def active(self) -> bool:
-        result = await self.runner.run(["nft", "list", "table", "inet", self.TABLE], check=False, timeout=3)
-        return result.returncode == 0 and "vdeck-owned" in result.stdout
+        return await self._table_state() == "owned"

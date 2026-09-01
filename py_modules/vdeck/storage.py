@@ -65,6 +65,15 @@ class VDeckStore:
     def save_runtime(self, state: RuntimeState) -> None:
         atomic_write_json(self.runtime_path, state.to_dict())
 
+    @staticmethod
+    def current_boot_id() -> str | None:
+        """Return Linux's per-boot identifier used to distinguish restart from reboot."""
+        try:
+            value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip().lower()
+        except OSError:
+            return None
+        return value if value else None
+
     def connection_dir(self, connection_id: str) -> Path:
         try:
             normalized = str(uuid.UUID(connection_id))

@@ -89,14 +89,29 @@ class RuntimeState:
     error_code: str | None = None
     error_message: str | None = None
     recovery_attempt: int = 0
+    boot_id: str | None = None
     process: dict[str, Any] = field(default_factory=dict)
     owned_routes: list[dict[str, Any]] = field(default_factory=list)
+    endpoint_cache: dict[str, list[str]] = field(default_factory=dict)
     firewall_active: bool = False
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> RuntimeState:
         known = {f.name for f in cls.__dataclass_fields__.values()}
-        return cls(**{key: val for key, val in value.items() if key in known})
+        normalized = {key: val for key, val in value.items() if key in known}
+        raw_cache = normalized.get("endpoint_cache")
+        normalized["endpoint_cache"] = (
+            {
+                str(endpoint): [str(address) for address in addresses]
+                for endpoint, addresses in raw_cache.items()
+                if isinstance(addresses, list)
+            }
+            if isinstance(raw_cache, dict)
+            else {}
+        )
+        if not isinstance(normalized.get("boot_id"), str | type(None)):
+            normalized["boot_id"] = None
+        return cls(**normalized)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -211,12 +211,7 @@ class VDeckService:
                     elif state.kill_switch and not previous_kill_switch:
                         metadata = self.store.get(runtime.connection_id)
                         backend = self.registry.get(metadata.protocol)
-                        info = self.store.parsed_runtime_info(metadata.id)
-                        addresses: list[str] = []
-                        for endpoint in info.get("endpoints", []):
-                            addresses.extend(await backend.context.inspector.resolve_endpoint(str(endpoint)))
-                        await self.firewall.enable(runtime.interface or "", addresses)
-                        runtime.firewall_active = True
+                        await self.manager._enable_kill_switch(backend, metadata, runtime)
                     self.store.save_runtime(runtime)
             return ok(settings=state.to_dict(), resolved_language=resolve_language(language))
 

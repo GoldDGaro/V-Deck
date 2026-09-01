@@ -26,6 +26,36 @@ def handshake_probe_target(allowed_ips: list[str]) -> str | None:
     return None
 
 
+def endpoint_with_address(endpoint: str, address: str) -> str:
+    if endpoint.startswith("["):
+        closing = endpoint.find("]")
+        port = endpoint[closing + 1 :].removeprefix(":") if closing >= 0 else ""
+    else:
+        _, separator, port = endpoint.rpartition(":")
+        if not separator:
+            port = ""
+    if not port.isdigit():
+        raise VDeckError("ENDPOINT_INVALID", "WireGuard endpoint is missing a valid port")
+    rendered_address = f"[{address}]" if ipaddress.ip_address(address).version == 6 else address
+    return f"{rendered_address}:{port}"
+
+
+def resolved_wireguard_config(text: str, endpoint_cache: dict[str, list[str]]) -> str:
+    rendered: list[str] = []
+    for raw in text.splitlines():
+        if "=" not in raw:
+            rendered.append(raw)
+            continue
+        key, value = raw.split("=", 1)
+        endpoint = value.strip()
+        addresses = endpoint_cache.get(endpoint, [])
+        if key.strip().lower() == "endpoint" and addresses:
+            rendered.append(f"{key}= {endpoint_with_address(endpoint, addresses[0])}")
+        else:
+            rendered.append(raw)
+    return "\n".join(rendered).rstrip() + "\n"
+
+
 class WireGuardBackend(VPNBackend):
     protocol_id = "wireguard"
     tool_name = "wg"
@@ -58,13 +88,16 @@ class WireGuardBackend(VPNBackend):
     async def start(self, metadata: ConnectionMetadata, runtime: RuntimeState) -> dict[str, Any]:
         directory = self.connection_dir(metadata)
         info = self.context.store.parsed_runtime_info(metadata.id)
+        endpoint_cache = await self.resolve_endpoint_cache(metadata, runtime)
+        resolved_config = resolved_wireguard_config((directory / "config").read_text(encoding="utf-8"), endpoint_cache)
         interface = interface_name(metadata.id)
         runtime.interface = interface
         self.context.store.save_runtime(runtime)
         try:
             await self._create_interface(interface, runtime, self.context.store.logs / f"{metadata.id}.log")
             await self.context.runner.run(
-                self.context.binaries.command(self.tool_name, "setconf", interface, str(directory / "config"))
+                self.context.binaries.command(self.tool_name, "setconf", interface, "/dev/stdin"),
+                input_text=resolved_config,
             )
             for address in info.get("interface_addresses", []):
                 family = "-6" if ":" in str(address) else "-4"
@@ -74,7 +107,10 @@ class WireGuardBackend(VPNBackend):
             runtime.owned_routes = [
                 record.to_dict()
                 for record in await self.context.routes.apply(
-                    interface, list(info.get("allowed_ips", [])), list(info.get("endpoints", []))
+                    interface,
+                    list(info.get("allowed_ips", [])),
+                    list(info.get("endpoints", [])),
+                    self.endpoint_addresses(runtime),
                 )
             ]
             self.context.store.save_runtime(runtime)
@@ -154,4 +190,43 @@ class WireGuardBackend(VPNBackend):
             "rx_bytes": sum(peer["rx_bytes"] for peer in peers),
             "tx_bytes": sum(peer["tx_bytes"] for peer in peers),
             "routes": bool(runtime.owned_routes),
+        }
+
+    async def health(self, metadata: ConnectionMetadata, runtime: RuntimeState) -> dict[str, Any]:
+        info = self.context.store.parsed_runtime_info(metadata.id)
+        allowed_ips = [str(item) for item in info.get("allowed_ips", [])]
+        before = await self.status(metadata, runtime)
+        interface = str(before.get("interface") or runtime.interface or interface_name(metadata.id))
+        if not before.get("connected") or not before.get("tunnel"):
+            return {**before, "healthy": False, "probe_succeeded": False}
+        routes_present = await self.context.inspector.vpn_routes_present(interface, allowed_ips)
+        if not routes_present:
+            return {
+                **before,
+                "healthy": False,
+                "probe_succeeded": False,
+                "routes": False,
+            }
+        target = handshake_probe_target(allowed_ips)
+        if not target:
+            return {**before, "healthy": False, "probe_succeeded": False, "routes": True}
+        family = "-6" if ":" in target else "-4"
+        probe = await self.context.runner.run(
+            ["ping", family, "-I", interface, "-c", "1", "-W", "3", target],
+            check=False,
+            timeout=5,
+        )
+        after = await self.status(metadata, runtime)
+        handshake_advanced = int(after.get("latest_handshake", 0)) > int(before.get("latest_handshake", 0))
+        received_traffic = int(after.get("rx_bytes", 0)) > int(before.get("rx_bytes", 0))
+        transmitted_probe = int(after.get("tx_bytes", 0)) > int(before.get("tx_bytes", 0))
+        healthy = bool(probe.returncode == 0 or after.get("handshake_fresh") or handshake_advanced or received_traffic)
+        return {
+            **after,
+            "healthy": healthy,
+            "probe_succeeded": probe.returncode == 0,
+            "handshake_advanced": handshake_advanced,
+            "rx_advanced": received_traffic,
+            "tx_advanced": transmitted_probe,
+            "routes": True,
         }

@@ -62,7 +62,7 @@ V-Deck — приватно тестируемый плагин Decky Loader д�
 
 - интерфейсы имеют вид `vdeck-xxxxxxxx`;
 - маршруты помечаются protocol `186`;
-- firewall находится только в таблице `inet vdeck`;
+- firewall находится только в таблице `inet vdeck` с проверяемым ownership comment; одноимённая чужая таблица не удаляется;
 - DNS изменяется и возвращается отдельно для интерфейса V-Deck;
 - процесс останавливается только при совпадении PID, исполняемого файла и времени старта процесса Linux.
 
@@ -72,7 +72,7 @@ V-Deck — приватно тестируемый плагин Decky Loader д�
 
 ## Kill switch
 
-Kill switch необязателен, изначально отключён и включается только после явного принятия предупреждения. Он активируется после первого успешного соединения, разрешает loopback, established-трафик, VPN-интерфейс и адреса VPN-сервера, затем блокирует остальной исходящий IPv4/IPv6-трафик. При неожиданном обрыве правила остаются активными во время восстановления. Ручное отключение удаляет только таблицу V-Deck.
+Kill switch необязателен, изначально отключён и включается только после явного принятия предупреждения. Он активируется после первого успешного соединения, разрешает loopback, established-трафик, VPN-интерфейс и кешированные IP-адреса VPN-сервера, затем блокирует остальной исходящий IPv4/IPv6-трафик. При неожиданном обрыве правила остаются активными во время восстановления. Если IP hostname endpoint изменился, V-Deck кратковременно разрешает DNS только к обнаруженным системным DNS-серверам и сразу возвращает строгие правила. Ручное отключение удаляет таблицу только после проверки ownership marker V-Deck.
 
 Если тестовая версия неожиданно заблокировала сеть, сначала выключите активное подключение в интерфейсе. Аварийная локальная команда из Desktop Mode:
 
@@ -192,7 +192,7 @@ Cleanup is restricted to V-Deck ownership markers:
 
 - interfaces match `vdeck-xxxxxxxx`;
 - routes carry protocol marker `186`;
-- firewall rules live only in `table inet vdeck`;
+- firewall rules live only in `table inet vdeck` with a verified ownership comment; an unrelated same-name table is never deleted;
 - DNS is changed and reverted per V-Deck interface;
 - a process is stopped only when PID, executable, and Linux process start time still match.
 
@@ -202,7 +202,7 @@ See `SECURITY.md` and `THIRD_PARTY_NOTICES.md` for more detail.
 
 ## Kill switch
 
-The kill switch is optional, initially disabled, and requires explicit acknowledgement. It activates after the first successful tunnel connection, permits loopback, established traffic, the VPN interface, and resolved VPN endpoints, then rejects other IPv4 and IPv6 output. On unexpected tunnel loss, it remains active while recovery runs. Manual OFF removes only V-Deck's table.
+The kill switch is optional, initially disabled, and requires explicit acknowledgement. It activates after the first successful tunnel connection, permits loopback, established traffic, the VPN interface, and cached VPN endpoint IPs, then rejects other IPv4 and IPv6 output. On unexpected tunnel loss, it remains active while recovery runs. If a hostname endpoint changes address, V-Deck briefly permits DNS only to detected system DNS servers and immediately restores the strict rules. Manual OFF removes the table only after verifying V-Deck's ownership marker.
 
 If this test build unexpectedly blocks networking, first turn the active connection off in the UI. Last-resort local recovery from Desktop Mode:
 

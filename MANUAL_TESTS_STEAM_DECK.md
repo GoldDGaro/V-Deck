@@ -142,6 +142,14 @@
 
 **Failure data to collect:** recovery timestamps, nft rules, ping/curl results, report.
 
+### Hostname endpoint и смена IP
+
+**Prerequisites:** профиль с hostname endpoint, Kill Switch ON, возможность изменить DNS A/AAAA запись тестового VPN-сервера.
+
+**Steps:** подключиться; остановить старый endpoint; изменить A/AAAA; дождаться recovery; во время восстановления проверить обычный direct IPv4/IPv6 traffic и `sudo nft list table inet vdeck`.
+
+**Expected result:** первая попытка использует кешированный IP; затем DNS разрешается только через временные правила к конкретным системным DNS-серверам; новый endpoint подключается; обычный direct traffic всё время заблокирован; временные DNS rules после resolve отсутствуют.
+
 ## 15. Wi‑Fi, hotspot и Ethernet transitions
 
 **Prerequisites:** connected VPN; Wi‑Fi A/B, телефонный hotspot, при наличии Ethernet.
@@ -166,9 +174,9 @@
 
 **Prerequisites:** Auto-connect setting; рабочий профиль.
 
-**Steps:** (a) Auto-connect OFF → reboot; (b) ON + VPN active → reboot/restart Decky; (c) ON + пользователь нажал OFF → reboot.
+**Steps:** (a) Auto-connect OFF + VPN active → reboot; (b) Auto-connect OFF + VPN active → перезапустить только V-Deck/Decky в той же загрузочной сессии; (c) Auto-connect ON + VPN active → reboot; (d) Auto-connect ON + пользователь нажал OFF → reboot/restart Decky.
 
-**Expected result:** (a) не включается; (b) восстанавливает last active; (c) остаётся выключенным. Критерий определяется `desired_state`, не одним флагом auto-connect.
+**Expected result:** (a) после cold boot не включается; (b) same-boot restart восстанавливает last active, потому что `desired_state=ON`, независимо от Auto-connect; (c) cold boot восстанавливает last active; (d) остаётся выключенным. Cold boot и restart различаются по Linux boot ID, а manual OFF — по `desired_state`.
 
 **Failure data to collect:** sanitized persistent/runtime state и startup log.
 
