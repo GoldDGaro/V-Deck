@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
+import os
 import re
 import socket
+import struct
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from .dns import DnsManager  # noqa: F401 - compatibility export for backends
 from .errors import VDeckError
 from .runner import CommandRunner
 
@@ -40,6 +45,7 @@ class RouteRecord:
     interface: str
     gateway: str | None = None
     device: str | None = None
+    metric: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -53,22 +59,89 @@ class NetworkInspector:
         result = await self.runner.run(["ip", "link", "show", "dev", name], check=False, timeout=3)
         return result.returncode == 0
 
+    async def interface_ready(self, name: str, addresses: list[str]) -> bool:
+        result = await self.runner.run(["ip", "-o", "address", "show", "dev", name], check=False, timeout=3)
+        link = await self.runner.run(["ip", "-o", "link", "show", "dev", name], check=False, timeout=3)
+        flags = re.search(r"<([^>]+)>", link.stdout)
+        present = set(re.findall(r"\binet6?\s+(\S+)", result.stdout))
+        return bool(
+            result.returncode == link.returncode == 0
+            and flags
+            and "UP" in flags[1].split(",")
+            and {str(ipaddress.ip_interface(value)) for value in addresses} <= present
+        )
+
+    async def tcp_probe(self, interface: str, address: str) -> bool:
+        def probe() -> bool:
+            family = socket.AF_INET6 if ":" in address else socket.AF_INET
+            bind_option = getattr(socket, "SO_BINDTODEVICE", None)
+            if bind_option is None:
+                return False
+            try:
+                with socket.socket(family, socket.SOCK_STREAM) as client:
+                    client.settimeout(4)
+                    client.setsockopt(socket.SOL_SOCKET, bind_option, interface.encode() + b"\x00")
+                    client.connect((address, 443))
+                    return True
+            except (OSError, AttributeError):
+                return False
+
+        return await asyncio.to_thread(probe)
+
+    async def dns_probe(self, interface: str, servers: list[str]) -> bool:
+        def probe() -> bool:
+            bind_option = getattr(socket, "SO_BINDTODEVICE", None)
+            if bind_option is None:
+                return False
+            for server in servers[:3]:
+                family = socket.AF_INET6 if ":" in server else socket.AF_INET
+                identifier = os.urandom(2)
+                query = (
+                    identifier + struct.pack("!HHHHH", 0x100, 1, 0, 0, 0) + b"\x07example\x03com\x00\x00\x01\x00\x01"
+                )
+                try:
+                    with socket.socket(family, socket.SOCK_DGRAM) as client:
+                        client.settimeout(3)
+                        client.setsockopt(socket.SOL_SOCKET, bind_option, interface.encode() + b"\x00")
+                        client.connect((server, 53))
+                        client.send(query)
+                        reply = client.recv(4096)
+                        if len(reply) >= 12 and reply[:2] == identifier:
+                            flags, _, answers = struct.unpack("!HHH", reply[2:8])
+                            if flags & 0x8000 and not flags & 0x000F and answers:
+                                return True
+                except (OSError, AttributeError):
+                    continue
+            return False
+
+        return await asyncio.to_thread(probe)
+
     async def resolve_endpoint(self, endpoint: str) -> list[str]:
         host = endpoint_host(endpoint)
         try:
-            return sorted(
-                {item[4][0] for item in await __import__("asyncio").to_thread(socket.getaddrinfo, host, None)}
-            )
+            return [str(ipaddress.ip_address(host))]
+        except ValueError:
+            pass
+        try:
+            answers = await asyncio.wait_for(asyncio.to_thread(socket.getaddrinfo, host, None), 12)
+            return sorted({str(item[4][0]) for item in answers})
+        except asyncio.TimeoutError as exc:
+            raise VDeckError("ENDPOINT_RESOLVE_TIMEOUT", "VPN endpoint DNS lookup timed out") from exc
         except socket.gaierror as exc:
             raise VDeckError("ENDPOINT_RESOLVE_FAILED", f"Unable to resolve VPN endpoint: {host}") from exc
 
     async def system_dns_servers(self) -> list[str]:
         """Read current resolver destinations without performing an external lookup."""
-        result = await self.runner.run(["resolvectl", "dns"], check=False, timeout=3)
-        if result.returncode != 0:
-            return []
+        outputs = []
+        for args in (["resolvectl", "dns"], ["nmcli", "--escape", "no", "-g", "IP4.DNS,IP6.DNS", "device", "show"]):
+            try:
+                result = await self.runner.run(args, check=False, timeout=3)
+                if result.returncode == 0:
+                    outputs.append(result.stdout)
+            except (OSError, VDeckError):
+                continue
         servers: list[str] = []
-        for token in re.split(r"\s+", result.stdout):
+        for token in re.split(r"\s+", "\n".join(outputs)):
             candidate = token.strip("[](),")
             try:
                 address = str(ipaddress.ip_address(candidate.split("%", 1)[0]))
@@ -107,7 +180,17 @@ class NetworkInspector:
                 halves = [str(item) for item in network.subnets(prefixlen_diff=1)]
                 if not (re.search(r"(?m)^default\b", output) or all(prefix in output for prefix in halves)):
                     return False
-            elif str(network) not in output:
+            elif str(network) not in output.split() and not (
+                network.prefixlen == network.max_prefixlen and str(network.network_address) in output.split()
+            ):
+                return False
+            # Presence alone is not sufficient: policy routing / a lower metric
+            # route could send actual traffic elsewhere.
+            target = str(next(network.hosts(), network.network_address))
+            if network.prefixlen == 0:
+                target = "1.1.1.1" if network.version == 4 else "2606:4700:4700::1111"
+            _, device = await self.route_to(target)
+            if device != interface:
                 return False
         return True
 
@@ -123,6 +206,8 @@ class RouteManager:
         allowed_ips: list[str],
         endpoints: list[str],
         endpoint_addresses: list[str] | None = None,
+        on_record: Callable[[RouteRecord], None] | None = None,
+        dns_servers: list[str] | None = None,
     ) -> list[RouteRecord]:
         records: list[RouteRecord] = []
         resolved_addresses = endpoint_addresses
@@ -132,16 +217,25 @@ class RouteManager:
                 resolved_addresses.extend(await self.inspector.resolve_endpoint(endpoint))
         for address in dict.fromkeys(resolved_addresses):
             gateway, device = await self.inspector.route_to(address)
+            if not device or device.startswith(("vdeck-", "vdns-")):
+                raise VDeckError("ENDPOINT_ROUTE_INVALID", "VPN endpoint has no physical-network route")
             family = ipaddress.ip_address(address).version
             prefix = f"{address}/{'128' if family == 6 else '32'}"
-            args = ["ip", f"-{family}", "route", "replace", prefix]
+            existing = await self.runner.run(["ip", f"-{family}", "route", "show", "exact", prefix], timeout=5)
+            if existing.stdout.strip():
+                continue  # an existing host route already pins the endpoint; never replace/delete it
+            args = ["ip", f"-{family}", "route", "add", prefix]
             if gateway:
                 args += ["via", gateway]
             if device:
                 args += ["dev", device]
             args += ["proto", "186"]
+            record = RouteRecord(family, prefix, interface, gateway, device)
+            if on_record:
+                on_record(record)  # write-ahead: a crash during ip must still be recoverable
+            records.append(record)
             await self.runner.run(args, timeout=5)
-            records.append(RouteRecord(family, prefix, interface, gateway, device))
+        installed: set[tuple[int, str]] = set()
         for raw in allowed_ips:
             try:
                 network = ipaddress.ip_network(raw, strict=False)
@@ -152,14 +246,51 @@ class RouteManager:
                 prefixes = [str(item) for item in network.subnets(prefixlen_diff=1)]
             for prefix in prefixes:
                 family = ipaddress.ip_network(prefix).version
+                if (family, prefix) in installed:
+                    continue
+                installed.add((family, prefix))
+                record = RouteRecord(family, prefix, interface, metric=4)
+                if on_record:
+                    on_record(record)
+                records.append(record)
                 await self.runner.run(
-                    ["ip", f"-{family}", "route", "replace", prefix, "dev", interface, "proto", "186", "metric", "4"],
+                    ["ip", f"-{family}", "route", "add", prefix, "dev", interface, "proto", "186", "metric", "4"],
                     timeout=5,
                 )
-                records.append(RouteRecord(family, prefix, interface))
+        # A connected LAN route is more specific than full-tunnel /1 routes.
+        # Explicit VPN DNS must use the VPN even if its subnet overlaps Wi-Fi.
+        for server in dns_servers or []:
+            _, device = await self.inspector.route_to(server)
+            if device == interface:
+                continue
+            if server in resolved_addresses:
+                raise VDeckError("DNS_ENDPOINT_CONFLICT", "DNS and VPN endpoint require conflicting host routes")
+            dns_address = ipaddress.ip_address(server)
+            prefix = f"{dns_address}/{dns_address.max_prefixlen}"
+            record = RouteRecord(dns_address.version, prefix, interface, metric=4)
+            if on_record:
+                on_record(record)
+            records.append(record)
+            await self.runner.run(
+                [
+                    "ip",
+                    f"-{dns_address.version}",
+                    "route",
+                    "add",
+                    prefix,
+                    "dev",
+                    interface,
+                    "proto",
+                    "186",
+                    "metric",
+                    "4",
+                ],
+                timeout=5,
+            )
         return records
 
     async def cleanup(self, records: list[dict[str, Any]]) -> None:
+        failed = False
         for record in reversed(records):
             args = ["ip", f"-{int(record['family'])}", "route", "del", str(record["prefix"])]
             if record.get("gateway"):
@@ -169,25 +300,16 @@ class RouteManager:
             elif record.get("interface"):
                 args += ["dev", str(record["interface"])]
             args += ["proto", "186"]
-            await self.runner.run(args, check=False, timeout=5)
-
-
-class DnsManager:
-    def __init__(self, runner: CommandRunner):
-        self.runner = runner
-
-    async def apply(self, interface: str, servers: list[str], full_tunnel: bool) -> None:
-        if not servers:
-            return
-        result = await self.runner.run(["resolvectl", "dns", interface, *servers], check=False, timeout=5)
-        if result.returncode != 0:
-            raise VDeckError("DNS_UNAVAILABLE", "systemd-resolved could not apply VPN DNS settings", result.stderr)
-        if full_tunnel:
-            await self.runner.run(["resolvectl", "domain", interface, "~."], timeout=5)
-
-    async def cleanup(self, interface: str | None) -> None:
-        if interface:
-            await self.runner.run(["resolvectl", "revert", interface], check=False, timeout=5)
+            if record.get("metric") is not None:
+                args += ["metric", str(record["metric"])]
+            try:
+                result = await self.runner.run(args, check=False, timeout=5)
+                if result.returncode and not any(word in result.stderr for word in ("No such", "Cannot find")):
+                    failed = True
+            except (OSError, VDeckError):
+                failed = True
+        if failed:
+            raise VDeckError("ROUTE_RESTORE_FAILED", "Some owned routes could not be removed; cleanup journal retained")
 
 
 class FirewallManager:
@@ -201,7 +323,9 @@ class FirewallManager:
     async def _table_state(self) -> str:
         result = await self.runner.run(["nft", "list", "table", "inet", self.TABLE], check=False, timeout=3)
         if result.returncode != 0:
-            return "absent"
+            if "No such" in result.stderr:
+                return "absent"
+            raise VDeckError("FIREWALL_INSPECTION_FAILED", "Cannot inspect kill switch ownership")
         current = f'comment "{self.OWNER_MARKER}"'
         if current in result.stdout or self.LEGACY_MARKER in result.stdout:
             return "owned"
@@ -228,7 +352,13 @@ class FirewallManager:
             f'add table inet vdeck {{ comment "{self.OWNER_MARKER}"; }}',
             "add chain inet vdeck output { type filter hook output priority -100; policy accept; }",
             f'add rule inet vdeck output oifname "lo" accept comment "{self.OWNER_MARKER}"',
-            f'add rule inet vdeck output ct state established,related accept comment "{self.OWNER_MARKER}"',
+            # Do not exempt all established flows: they can leak on the physical
+            # interface after a route/tunnel disappears.
+            "add rule inet vdeck output meta l4proto ipv6-icmp icmpv6 type "
+            f'{{ nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit }} accept comment "{self.OWNER_MARKER}"',
+            f'add rule inet vdeck output udp sport 68 udp dport 67 accept comment "{self.OWNER_MARKER}"',
+            "add rule inet vdeck output ip6 daddr ff02::1:2 udp sport 546 udp dport 547 "
+            f'accept comment "{self.OWNER_MARKER}"',
         ]
         if interface:
             lines.append(f'add rule inet vdeck output oifname "{interface}" accept comment "{self.OWNER_MARKER}"')
@@ -257,8 +387,42 @@ class FirewallManager:
         if table_state == "foreign":
             LOGGER.warning("Refusing to delete unowned nftables table inet vdeck")
             return False
-        await self.runner.run(["nft", "delete", "table", "inet", self.TABLE], check=False, timeout=5)
+        await self.runner.run(["nft", "delete", "table", "inet", self.TABLE], timeout=5)
         return True
 
     async def active(self) -> bool:
         return await self._table_state() == "owned"
+
+
+class Ipv6Guard:
+    """Prevent IPv6 bypass for an IPv4-only full tunnel, independent of KS."""
+
+    def __init__(self, runner: CommandRunner):
+        self.runner = runner
+
+    async def cleanup(self) -> None:
+        current = await self.runner.run(["nft", "list", "table", "inet", "vdeck_ipv6"], check=False, timeout=3)
+        if current.returncode:
+            if "No such" in current.stderr:
+                return
+            raise VDeckError("IPV6_GUARD_FAILED", "Cannot inspect IPv6 protection")
+        if FirewallManager.OWNER_MARKER not in current.stdout:
+            raise VDeckError("FIREWALL_OWNERSHIP_CONFLICT", "IPv6 guard table is not owned by V-Deck")
+        await self.runner.run(["nft", "delete", "table", "inet", "vdeck_ipv6"], timeout=5)
+
+    async def enable(self, interface: str, endpoints: list[str]) -> None:
+        await self.cleanup()
+        rules = [
+            f'add table inet vdeck_ipv6 {{ comment "{FirewallManager.OWNER_MARKER}"; }}',
+            "add chain inet vdeck_ipv6 output { type filter hook output priority -90; policy accept; }",
+            'add rule inet vdeck_ipv6 output oifname "lo" accept',
+            f'add rule inet vdeck_ipv6 output oifname "{interface}" accept',
+            "add rule inet vdeck_ipv6 output meta l4proto ipv6-icmp icmpv6 type "
+            "{ nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit } accept",
+            "add rule inet vdeck_ipv6 output ip6 daddr ff02::1:2 udp sport 546 udp dport 547 accept",
+        ]
+        for address in endpoints:
+            if ipaddress.ip_address(address).version == 6:
+                rules.append(f"add rule inet vdeck_ipv6 output ip6 daddr {address} accept")
+        rules.append("add rule inet vdeck_ipv6 output meta nfproto ipv6 reject")
+        await self.runner.run(["nft", "-f", "-"], input_text="\n".join(rules) + "\n", timeout=5)

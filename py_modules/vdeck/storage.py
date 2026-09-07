@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -14,6 +15,7 @@ from typing import Any
 
 from .atomic import atomic_write_json, read_json
 from .errors import VDeckError
+from .logging_utils import safe_exception_details
 from .models import ConnectionMetadata, PersistentState, Protocol, RuntimeState
 from .parsers import parse_config
 from .security import secure_mkdir, secure_write
@@ -98,17 +100,56 @@ class VDeckStore:
 
     def list(self) -> list[ConnectionMetadata]:
         result: list[ConnectionMetadata] = []
-        for child in self.configs.iterdir():
+        try:
+            children = list(self.configs.iterdir())
+        except OSError as exc:
+            raise VDeckError("STORAGE_NOT_ACCESSIBLE", "Connection storage is not accessible") from exc
+        for child in children:
             if not child.is_dir() or child.is_symlink() or child.name.startswith("."):
                 continue
-            raw = read_json(child / "metadata.json", None)
-            if isinstance(raw, dict):
-                try:
-                    result.append(ConnectionMetadata.from_dict(raw))
-                except (TypeError, ValueError):
-                    continue
+            try:
+                with (child / "metadata.json").open(encoding="utf-8") as stream:
+                    raw = json.load(stream)
+                if not isinstance(raw, dict):
+                    raise ValueError("Invalid metadata type")
+                metadata = ConnectionMetadata.from_dict(raw)
+                if self.connection_dir(metadata.id).name != child.name:
+                    raise ValueError("Metadata directory mismatch")
+                result.append(metadata)
+            except (OSError, TypeError, ValueError) as exc:
+                if self.logger:
+                    self.logger.error("metadata unreadable path=%s error=%s", child, type(exc).__name__)
+                raise VDeckError(
+                    "STORAGE_METADATA_UNREADABLE", "A stored profile could not be read; see technical log"
+                ) from exc
         result.sort(key=lambda item: item.last_used_at or item.created_at, reverse=True)
         return result
+
+    def audit(self, connection_id: str, stage: str) -> None:
+        """File identity/access evidence, not contents; no mutation on a connect path."""
+        if not self.logger:
+            return
+        try:
+            directory = self.connection_dir(connection_id)
+        except VDeckError:
+            self.logger.warning("profile audit invalid connection id stage=%s", stage)
+            return
+        records = {}
+        for name in ("metadata.json", "runtime-info.json", "config"):
+            path = directory / name
+            try:
+                value = path.stat()
+                records[name] = {
+                    "inode": value.st_ino,
+                    "uid": value.st_uid,
+                    "mode": oct(value.st_mode & 0o777),
+                    "size": value.st_size,
+                }
+            except OSError as exc:
+                records[name] = {"error": type(exc).__name__}
+        self.logger.info(
+            "profile audit stage=%s connection=%s settings_dir=%s files=%s", stage, connection_id, self.root, records
+        )
 
     def parsed_runtime_info(self, connection_id: str) -> dict[str, Any]:
         value = read_json(self.connection_dir(connection_id) / "runtime-info.json", {})
@@ -136,7 +177,7 @@ class VDeckStore:
                     protocol.value,
                     source_path,
                     code,
-                    exc,
+                    safe_exception_details(exc),
                 )
             raise
         if self.logger:
@@ -188,7 +229,12 @@ class VDeckStore:
         except Exception as exc:
             if self.logger:
                 code = exc.code if isinstance(exc, VDeckError) else type(exc).__name__
-                self.logger.warning("connection commit failed connection=%s code=%s error=%s", connection_id, code, exc)
+                self.logger.warning(
+                    "connection commit failed connection=%s code=%s error=%s",
+                    connection_id,
+                    code,
+                    safe_exception_details(exc),
+                )
             shutil.rmtree(stage, ignore_errors=True)
             raise
         return metadata
@@ -199,10 +245,14 @@ class VDeckStore:
         if username is not None or password is not None:
             if not username or password is None:
                 raise VDeckError("CREDENTIALS_REQUIRED", "Both username and password are required")
+            if any(character in username + password for character in "\r\n\x00"):
+                raise VDeckError("CREDENTIALS_INVALID", "Credentials must be single-line values")
             secure_write(directory / "auth", f"{username}\n{password}\n".encode())
         if passphrase is not None:
             if not passphrase:
                 raise VDeckError("PASSPHRASE_REQUIRED", "Private-key passphrase cannot be empty")
+            if any(character in passphrase for character in "\r\n\x00"):
+                raise VDeckError("CREDENTIALS_INVALID", "Passphrase must be a single-line value")
             secure_write(directory / "passphrase", (passphrase + "\n").encode("utf-8"))
 
     def save_credentials(

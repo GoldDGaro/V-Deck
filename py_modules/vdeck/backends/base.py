@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Any
 from ..binaries import BinaryManager
 from ..errors import VDeckError
 from ..models import ConnectionMetadata, RuntimeState
-from ..network import DnsManager, NetworkInspector, RouteManager
+from ..network import DnsManager, NetworkInspector, RouteManager, interface_name
 from ..runner import CommandRunner
 from ..storage import VDeckStore
 
@@ -32,6 +33,47 @@ class VPNBackend(ABC):
     def __init__(self, context: BackendContext):
         self.context = context
 
+    @property
+    def logger(self) -> logging.Logger:
+        return self.context.store.logger or logging.getLogger(__name__)
+
+    async def _verify_dns(self, metadata: ConnectionMetadata, runtime: RuntimeState) -> None:
+        info = self.context.store.parsed_runtime_info(metadata.id)
+        servers = list(info.get("dns_servers", []))
+        configured = bool(servers)
+        interface = runtime.interface or interface_name(metadata.id)
+        if configured:
+            if not await self.context.dns.healthy(interface):
+                raise VDeckError("DNS_VERIFY_FAILED", "The system resolver no longer uses VPN DNS")
+        else:
+            servers = await self.context.dns.unmodified_servers()
+        require_tunnel = (
+            configured
+            or self.context.store.load_state().kill_switch
+            or any(route in {"0.0.0.0/0", "::/0"} for route in info.get("allowed_ips", []))
+        )
+        destinations: dict[str, list[str]] = {}
+        for server in servers:
+            _, device = await self.context.inspector.route_to(server)
+            if not device or (require_tunnel and device != interface):
+                raise VDeckError(
+                    "DNS_ROUTE_MISSING" if configured else "DNS_CONFIGURATION_REQUIRED",
+                    "DNS route could not be verified; configure DNS reachable through the VPN",
+                )
+            destinations.setdefault(device, []).append(server)
+        answered = False
+        for device, addresses in destinations.items():
+            answered = await self.context.inspector.dns_probe(device, addresses) or answered
+        if not answered:
+            raise VDeckError("DNS_PROBE_FAILED", "DNS did not answer through its verified network path")
+        self.logger.info(
+            "DNS probe succeeded interface=%s dns_count=%d mode=%s firewall_active=%s",
+            interface,
+            len(servers),
+            "configured" if configured else "unchanged",
+            runtime.firewall_active,
+        )
+
     @abstractmethod
     async def start(self, metadata: ConnectionMetadata, runtime: RuntimeState) -> dict[str, Any]: ...
 
@@ -44,6 +86,12 @@ class VPNBackend(ABC):
     async def health(self, metadata: ConnectionMetadata, runtime: RuntimeState) -> dict[str, Any]:
         status = await self.status(metadata, runtime)
         status.setdefault("healthy", bool(status.get("connected")))
+        return status
+
+    async def verify_connected(self, metadata: ConnectionMetadata, runtime: RuntimeState) -> dict[str, Any]:
+        status = await self.health(metadata, runtime)
+        if not status.get("healthy", status.get("connected")):
+            raise VDeckError("VPN_TRAFFIC_UNCONFIRMED", "VPN health verification failed")
         return status
 
     async def resolve_endpoint_cache(

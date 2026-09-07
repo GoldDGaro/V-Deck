@@ -30,6 +30,8 @@ class FakeRunner:
             return CommandResult(tuple(rendered), 0, self.nft_table, "")
         if rendered == ["resolvectl", "dns"]:
             return CommandResult(tuple(rendered), 0, self.dns_output, "")
+        if "get" in rendered:
+            return CommandResult(tuple(rendered), 0, "1.1.1.1 dev vdeck-12345678", "")
         family = 6 if "-6" in rendered else 4
         return CommandResult(tuple(rendered), 0, self.routes.get(family, ""), "")
 

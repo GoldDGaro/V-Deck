@@ -38,11 +38,12 @@ jobs:
           cp ../outputs/release-manifest.json release/
       - uses: softprops/action-gh-release@v2
         with:
-          name: V-Deck 0.1.0 — Private test release / Приватный тестовый релиз
+          name: V-Deck ${{ github.ref_name }} — Public preview / Публичная тестовая версия
           prerelease: true
           files: |
             release/V-Deck-v0.1.0.zip
             release/V-Deck-v0.1.0-source.zip
             release/SHA256SUMS.txt
             release/release-manifest.json
-          generate_release_notes: true
+          body_path: .github/RELEASE_NOTES.md
+          generate_release_notes: false

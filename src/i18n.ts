@@ -24,6 +24,9 @@ const translations = {
     import: "Import",
     imported: "VPN imported",
     importFailed: "Failed to import configuration",
+    importDebugLog: "Import debug log",
+    importWorking: "Import in progress…",
+    importNameRequired: "Enter a connection name to enable Import.",
     fileNotAccessible: "The selected configuration file is not accessible",
     reportSaved: "Diagnostic report saved",
     autoConnect: "Auto-connect",
@@ -53,6 +56,23 @@ const translations = {
     ipv4: "IPv4",
     ipv6: "IPv6",
     external_ip: "External IP",
+    deviceExternalIp: "Device external IPv4",
+    checkExternalIp: "Check external IPv4 now",
+    ipBefore: "V-Deck OFF · last check",
+    ipAfter: "V-Deck connected · last check",
+    ipChanged: "The measured IPv4 addresses differ.",
+    ipUnchanged: "The measured IPv4 addresses are the same.",
+    ipPrivacy:
+      "Only on click: HTTPS to ipify, with icanhazip as fallback. The service sees your public IP; VPN keys and configuration are never sent. Samples stay in memory until the plugin restarts.",
+    ipRoutingNote:
+      "Check once with V-Deck OFF, then connect and check again. Uses current system routing; does not bypass Kill Switch. Another VPN or split routing may affect the result. This IPv4 comparison is not a full leak test.",
+    ipCheckFailed: "Could not check the external IP",
+    ipTlsFailed:
+      "Could not verify the IP service's TLS certificate. Check device time and the technical log.",
+    ipCaUnavailable: "Could not load the system's trusted CA certificates.",
+    ipNetworkChanged: "The network changed during the check. Try again.",
+    ipVpnBusy:
+      "Wait for VPN recovery or manually turn V-Deck off before checking.",
     loading: "Loading…",
     validationFailed: "Configuration validation failed",
     migrationFailed: "Migration failed",
@@ -88,6 +108,10 @@ const translations = {
     import: "Импортировать",
     imported: "VPN импортирован",
     importFailed: "Не удалось импортировать конфигурацию",
+    importDebugLog: "Журнал импорта",
+    importWorking: "Выполняется импорт…",
+    importNameRequired:
+      "Введите название подключения, чтобы включить кнопку импорта.",
     fileNotAccessible: "Выбранный файл конфигурации недоступен",
     reportSaved: "Диагностический отчёт сохранён",
     autoConnect: "Автоподключение",
@@ -117,6 +141,24 @@ const translations = {
     ipv4: "IPv4",
     ipv6: "IPv6",
     external_ip: "Внешний IP",
+    deviceExternalIp: "Внешний IPv4 устройства",
+    checkExternalIp: "Проверить внешний IPv4",
+    ipBefore: "V-Deck выключен · последняя проверка",
+    ipAfter: "V-Deck подключён · последняя проверка",
+    ipChanged: "Измеренные IPv4-адреса различаются.",
+    ipUnchanged: "Измеренные IPv4-адреса совпадают.",
+    ipPrivacy:
+      "Только по нажатию: HTTPS-запрос к ipify, при ошибке — к icanhazip. Сервис видит ваш внешний IP; ключи и конфигурация VPN не отправляются. Результаты хранятся в памяти до перезапуска плагина.",
+    ipRoutingNote:
+      "Проверьте IP с выключенным V-Deck, затем подключитесь и повторите проверку. Используется текущий системный маршрут без обхода Kill Switch. Другой VPN или split tunnel могут влиять на результат. Сравнение IPv4 не заменяет проверку всех утечек.",
+    ipCheckFailed: "Не удалось проверить внешний IP",
+    ipTlsFailed:
+      "Не удалось проверить TLS-сертификат сервиса IP. Проверьте время устройства и технический лог.",
+    ipCaUnavailable:
+      "Не удалось загрузить системные доверенные CA-сертификаты.",
+    ipNetworkChanged: "Во время проверки сеть изменилась. Повторите запрос.",
+    ipVpnBusy:
+      "Дождитесь восстановления VPN или вручную выключите V-Deck перед проверкой.",
     loading: "Загрузка…",
     validationFailed: "Конфигурация не прошла проверку",
     migrationFailed: "Ошибка миграции",
@@ -138,6 +180,12 @@ export function t(language: Language, key: TranslationKey): string {
 }
 
 const stableErrorKeys: Record<string, TranslationKey> = {
+  EXTERNAL_IP_UNAVAILABLE: "ipCheckFailed",
+  EXTERNAL_IP_TLS_FAILED: "ipTlsFailed",
+  EXTERNAL_IP_CA_UNAVAILABLE: "ipCaUnavailable",
+  EXTERNAL_IP_TIMEOUT: "ipCheckFailed",
+  EXTERNAL_IP_NETWORK_CHANGED: "ipNetworkChanged",
+  EXTERNAL_IP_VPN_BUSY: "ipVpnBusy",
   CREDENTIALS_REQUIRED: "credentialsRequired",
   PASSPHRASE_REQUIRED: "credentialsRequired",
   OPENVPN_AUTH_FAILED: "authenticationFailed",

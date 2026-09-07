@@ -16,6 +16,9 @@ REPOSITORIES = {
     "wolfssl": "COPYING",
 }
 PROJECT_REQUIRED = {
+    "V-Deck-source/V-Deck/USER_GUIDE_RU.md",
+    "V-Deck-source/V-Deck/USER_GUIDE_EN.md",
+    "V-Deck-source/V-Deck/VALIDATION.md",
     "V-Deck-source/V-Deck/backend/Dockerfile",
     "V-Deck-source/V-Deck/backend/README.md",
     "V-Deck-source/V-Deck/backend/versions.json",

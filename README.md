@@ -1,11 +1,15 @@
 # V-Deck 0.1.0
 
-V-Deck — приватно тестируемый плагин Decky Loader для управления AmneziaWG, WireGuard и OpenVPN на Steam Deck прямо из Gaming Mode.
+V-Deck — плагин Decky Loader для управления VPN на Steam Deck прямо из Gaming Mode: профили AmneziaWG, WireGuard и OpenVPN, автоподключение, Kill Switch и диагностика. VPN-сервер и конфигурацию предоставляет пользователь; подписка или VPN-сервис в проект не входят.
 
 [English version](#english)
 
 > [!IMPORTANT]
-> Автоматическая сборка, статический анализ и тесты проходят. Версия 0.1.0 пока является тестовой: работа на физическом Steam Deck, реальные VPN-серверы, suspend/resume и смена сетей должны быть проверены по `MANUAL_TESTS_STEAM_DECK.md` до повседневного использования.
+> Публичный предварительный релиз, не гарантия совместимости или отсутствия утечек. На физическом Steam Deck пользователь подтвердил AmneziaWG `.conf`/`.vpn`, подключение и доступ к игровому серверу, пинг, RU/EN, исправленную раскладку кнопок, перезагрузку и выключение/включение Wi-Fi с автоподключением и KS. WireGuard и OpenVPN пока проверены только локально с имитацией сети. Последний TLS-фикс проверки внешнего IP ещё ждёт проверки на устройстве. Полная матрица: [статус проверки](VALIDATION.md).
+
+[Скачать установочный ZIP](https://github.com/GoldDGaro/V-Deck/releases/tag/v0.1.0-preview.2) · [Инструкция пользователя](USER_GUIDE_RU.md) · [English user guide](USER_GUIDE_EN.md) · [История изменений](CHANGELOG.md)
+
+Релизный тег `v0.1.0-preview.2` обозначает новую сборку версии плагина `0.1.0`; старый `v0.1.0` сохранён для истории. Устанавливайте ZIP из нового релиза.
 
 ## Возможности
 
@@ -39,24 +43,36 @@ V-Deck — приватно тестируемый плагин Decky Loader д�
 
 1. Установите актуальную стабильную версию Decky Loader.
 2. На странице Releases скачайте `V-Deck-v0.1.0.zip`. Не используйте автоматически созданный GitHub архив исходников как установочный файл.
-3. Включите режим разработчика Decky и установите плагин из ZIP. Альтернативно распакуйте верхнюю папку `V-Deck` в каталог плагинов Decky.
+3. В настройках Decky включите режим разработчика, откройте раздел Developer и выберите установку плагина из ZIP. Пошаговые действия: [инструкция](USER_GUIDE_RU.md).
 4. Перезапустите Decky Loader и откройте V-Deck в Quick Access Menu.
-5. Импортируйте тестовый профиль без реальных секретов либо профиль, предназначенный для контролируемого тестирования.
+5. Импортируйте свой рабочий профиль для контролируемого тестирования. Фикстуры из `tests/` синтетические и к серверу не подключаются. Для первого подключения оставьте KS выключенным.
+
+Docker, Go, Python/pnpm для разработки и отдельная установка OpenVPN/WireGuard/AmneziaWG на Steam Deck не нужны: клиенты входят в ZIP, Python предоставляет Decky. Используются штатные сетевые средства SteamOS; другие Linux-дистрибутивы и изменённые системные сетевые стеки не гарантируются.
 
 Плагин запрашивает флаг Decky `root`: без повышенных привилегий Linux не позволяет создавать туннельные интерфейсы, назначать маршруты, управлять `nftables` и настраивать DNS отдельного интерфейса. Подчёркнутый шаблонный флаг `_root` не включает повышенные права в Decky Loader.
 
 ## Основной сценарий
 
-1. Нажмите импорт и выберите `.conf`, `.vpn` или `.ovpn`.
-2. Проверьте определённый протокол и имя подключения.
+1. Нажмите «Добавить VPN», выберите протокол, затем файл `.conf`, `.vpn` или `.ovpn`.
+2. Проверьте непустое имя подключения и нажмите «Импорт» — выбор файла сам по себе профиль не сохраняет.
 3. При необходимости введите учётные данные OpenVPN; они хранятся отдельно от общих метаданных.
-4. Включите подключение. V-Deck запускает backend, проверяет интерфейс и маршруты, применяет DNS и только после успешного соединения может активировать kill switch.
+4. Включите подключение. V-Deck запускает backend, проверяет интерфейс, маршруты, DNS и трафик. При первом ручном Connect kill switch применяется после базовых проверок, при восстановлении — до них.
 5. Откройте диагностику, чтобы проверить handshake, прохождение трафика, маршрутизацию и DNS.
 6. Выключение вручную сохраняется и не отменяется автоматически после перезагрузки или смены сети.
 
 V-Deck передаёт backend оба значения Decky File Picker (`path` и `realpath`) и использует первый реально доступный обычный файл. Ошибка выбора, parser или записи профиля всегда отображается в UI вместе со стабильным error code. Безопасная техническая последовательность импорта сохраняется в `DECKY_PLUGIN_LOG_DIR/vdeck.log` без ключей, паролей или содержимого конфигурации.
 
 ## Безопасность и приватность
+
+### Проверка IP до и после VPN
+
+На Linux IP-проверка явно использует системный CA-bundle (`/etc/ssl/cert.pem`, затем стандартные варианты в `/etc/ssl/certs/`), а не пути сборочного OpenSSL внутри Decky/PyInstaller. Проверка цепочки и hostname обязательна. Отсутствующее хранилище и отклонённый сертификат имеют отдельные коды `EXTERNAL_IP_CA_UNAVAILABLE` и `EXTERNAL_IP_TLS_FAILED`; технический лог содержит число CA и `verify_code`, но не содержимое ответа или сертификатов.
+
+В диагностике нажмите «Проверить внешний IPv4» при выключенном V-Deck. Затем вернитесь к профилю, подключите VPN и повторите проверку. Оба снимка отображаются вместе со временем, источником ответа и названием активного профиля. При смене сети во время запроса результат отклоняется; старые снимки помечены как последние проверки, а не текущий непрерывный статус.
+
+Используются стандартные Python `urllib.request`, `ssl`, `ipaddress` и HTTPS-сервисы [ipify](https://www.ipify.org/) (`api.ipify.org`), резервный `ipv4.icanhazip.com`. Сервис видит внешний адрес отправителя, но не получает конфигурацию, ключи или пароли. Проверка сертификата обязательна; редиректы и proxy из окружения отключены. Таймаут запроса — 4 секунды на сервис, ожидание RPC — до 10 секунд. Новые системные пакеты не нужны.
+
+Запрос идёт по текущей системной маршрутизации: V-Deck не отключает VPN, не снимает Kill Switch и не создаёт обходной маршрут ради проверки. «V-Deck выключен» не означает, что выключены другие VPN. Сравнение IPv4 не доказывает отсутствие IPv6/DNS-утечек или полного обхода VPN при split tunnel. Снимки исчезают при перезапуске backend плагина.
 
 Импортируемые файлы считаются недоверенными. V-Deck отклоняет OpenVPN command hooks, плагины, management-директивы, произвольные пути вывода, абсолютные пути, обход каталогов, неизвестные inline-блоки и выход через символические ссылки. Распаковка Amnezia `.vpn` ограничена по размеру.
 
@@ -68,13 +84,13 @@ V-Deck передаёт backend оба значения Decky File Picker (`path
 - DNS изменяется и возвращается отдельно для интерфейса V-Deck;
 - процесс останавливается только при совпадении PID, исполняемого файла и времени старта процесса Linux.
 
-Каталоги подключений создаются с правами `0700`, чувствительные файлы — `0600`. Секреты не передаются в аргументах процессов. Логи и отчёты удаляют ключи WireGuard/AmneziaWG, пароли, токены, сертификаты, приватные ключи и маскируют IP-адреса. Телеметрии нет. Запрос внешнего IP выполняется только при ручном обновлении или экспорте диагностики.
+Каталоги подключений создаются с правами `0700`, чувствительные файлы — `0600`. Секреты не передаются в аргументах процессов. Содержимое config не логируется; native stdout/stderr сохраняется только как распознанные диагностические фразы без произвольных значений. Исключения содержат тип/место/код, но не локальные переменные. IP-адреса маскируются в экспортируемых отчётах; технический лог может содержать пути и сетевые адреса. Телеметрии нет. Проверка внешнего IPv4 выполняется только отдельной кнопкой в диагностике. Открытие/обновление диагностики, экспорт отчёта и фоновый пинг не обращаются к сервисам определения IP. Полные результаты этой проверки хранятся только в памяти и не добавляются в лог или экспорт.
 
 Подробнее: `SECURITY.md` и `THIRD_PARTY_NOTICES.md`.
 
 ## Kill switch
 
-Kill switch необязателен, изначально отключён и включается только после явного принятия предупреждения. Он активируется после первого успешного соединения, разрешает loopback, established-трафик, VPN-интерфейс и кешированные IP-адреса VPN-сервера, затем блокирует остальной исходящий IPv4/IPv6-трафик. При неожиданном обрыве правила остаются активными во время восстановления. Если IP hostname endpoint изменился, V-Deck кратковременно разрешает DNS только к обнаруженным системным DNS-серверам и сразу возвращает строгие правила. Ручное отключение удаляет таблицу только после проверки ownership marker V-Deck.
+Kill switch необязателен, изначально отключён и включается только после явного принятия предупреждения. При первом ручном Connect он активируется после успешного соединения; при автоподключении/восстановлении правила заранее разрешают будущий собственный интерфейс, до проверок трафика. Он разрешает loopback, служебный DHCP/IPv6 ND, VPN-интерфейс и кешированные IP-адреса VPN-сервера, затем блокирует остальной исходящий IPv4/IPv6-трафик. При неожиданном обрыве правила остаются активными во время восстановления. Если IP hostname endpoint изменился, V-Deck кратковременно разрешает DNS только к обнаруженным системным DNS-серверам и сразу возвращает строгие правила. Ручное отключение удаляет таблицу только после проверки ownership marker V-Deck.
 
 Если тестовая версия неожиданно заблокировала сеть, сначала выключите активное подключение в интерфейсе. Аварийная локальная команда из Desktop Mode:
 
@@ -92,7 +108,7 @@ sudo nft delete table inet vdeck
 
 ## Сборка и проверки
 
-Для кода плагина требуются Python 3.10+, Node.js 20+ и pnpm 9+. Docker используется только сопровождающими разработчиками и CI для воспроизводимой сборки Linux x86-64 компонентов; пользователю и Steam Deck он не нужен. Go 1.25.14, Zig 0.15.2, upstream tags/commits и release hashes закреплены в `backend/versions.json`.
+Версии CI: Python 3.10.21, Node.js 22.23.2 и pnpm 9.15.9 (не pnpm latest). Docker используется только сопровождающими разработчиками и CI для воспроизводимой сборки Linux x86-64 компонентов; пользователю и Steam Deck он не нужен. Go 1.25.14, Zig 0.15.2, upstream tags/commits и release hashes закреплены в `backend/versions.json`.
 
 ```text
 PYTHONPATH=py_modules python -m unittest discover -s tests -v
@@ -107,6 +123,7 @@ pnpm build
 docker build -f backend/Dockerfile --target binaries --output type=local,dest=release/native .
 python scripts/elf_audit.py release/native/*
 python scripts/elf_audit.py bin/amneziawg-go bin/awg bin/wireguard-go bin/wg bin/openvpn
+python scripts/fetch_sources.py
 python scripts/build_release.py
 python scripts/verify_release.py ../outputs/V-Deck-v0.1.0.zip
 python scripts/verify_source.py ../outputs/V-Deck-v0.1.0-source.zip
@@ -116,8 +133,9 @@ python scripts/verify_source.py ../outputs/V-Deck-v0.1.0-source.zip
 
 ## Ограничения тестовой версии
 
-- Требуется ручная проверка интерфейса Gaming Mode, suspend/resume, roaming между Wi-Fi, IPv6-провайдеров и реальных VPN-серверов.
-- DNS OpenVPN применяется для локальных `dhcp-option DNS`; параметры, приходящие только через server push, требуют проверки на устройстве.
+- Базовый AWG-сценарий и Wi-Fi OFF/ON проверены пользователем на одном Steam Deck; это не проверка всех устройств/серверов. Suspend/resume, roaming между разными сетями, IPv6/DNS-утечки и длительная стабильность остаются физическими тестами.
+- OpenVPN требует явные локальные `route`/`redirect-gateway` и `dhcp-option DNS`. Маршруты создаёт и очищает V-Deck, OpenVPN запускается с `route-noexec`. Профили только с server-push routes/DNS пока не поддержаны и получают понятный error code до запуска процесса. Проверка на реальном сервере обязательна.
+- WG `Table=off` и custom Table не поддерживаются: импорт явно отклоняет их, не меняя смысл профиля.
 - OpenVPN с wolfSSL не поддерживает часть устаревших OpenSSL-профилей, особенно старые Blowfish-конфигурации. Рекомендуется AES.
 - В версии 0.1.0 нет вставки `vpn://`; импортируйте экспортированный файл `.vpn`.
 - Совместимость PolyForm Noncommercial с правилами публикации в Decky Store пока не подтверждена. Поддерживаемый канал тестовой установки — ZIP из GitHub Releases.
@@ -134,10 +152,14 @@ python scripts/verify_source.py ../outputs/V-Deck-v0.1.0-source.zip
 
 ## English
 
-V-Deck is a privately tested Decky Loader plugin for managing AmneziaWG, WireGuard, and OpenVPN on Steam Deck directly from Gaming Mode.
+V-Deck is a Decky Loader VPN manager for Steam Deck Gaming Mode: AmneziaWG, WireGuard and OpenVPN profiles, auto-connect, Kill Switch and diagnostics. Bring your own VPN server and configuration; no VPN service or subscription is included.
 
 > [!IMPORTANT]
-> Automated builds, static analysis, and tests pass. Version 0.1.0 is still a test release: physical Steam Deck behavior, real VPN servers, suspend/resume, and network roaming must be validated with `MANUAL_TESTS_STEAM_DECK.md` before everyday use.
+> Public preview, not a compatibility or leak-free guarantee. User feedback on a physical Steam Deck confirms AmneziaWG `.conf`/`.vpn`, connection and real game-server traffic, ping, RU/EN, corrected buttons, reboot and Wi-Fi OFF/ON with auto-connect and KS. WireGuard and OpenVPN have local mocked coverage only. The latest external-IP TLS fix still awaits device validation. See the [validation matrix](VALIDATION.md).
+
+[Download installer](https://github.com/GoldDGaro/V-Deck/releases/tag/v0.1.0-preview.2) · [User guide](USER_GUIDE_EN.md) · [Инструкция на русском](USER_GUIDE_RU.md) · [Changelog](CHANGELOG.md)
+
+Release tag `v0.1.0-preview.2` identifies the updated build of plugin version `0.1.0`; the old `v0.1.0` tag is preserved. Use the ZIP from the new release.
 
 ## Features
 
@@ -171,24 +193,36 @@ All five release executables are static x86-64 ELF64 files without a dynamic loa
 
 1. Install a current stable Decky Loader release.
 2. Download `V-Deck-v0.1.0.zip` from Releases. Do not use GitHub's automatically generated source archive as the installer.
-3. Enable Decky developer mode and install the plugin ZIP. Alternatively, unpack its top-level `V-Deck` directory into Decky's plugins directory.
+3. Enable developer mode in Decky settings, open Developer and choose ZIP plugin installation. See the [step-by-step guide](USER_GUIDE_EN.md).
 4. Restart Decky Loader and open V-Deck from the Quick Access menu.
-5. Import a synthetic profile or one intended for controlled testing.
+5. Import a working profile intended for controlled testing. Synthetic fixtures under `tests/` cannot connect to real servers. Leave KS off for the first connection.
+
+No Docker, development Go/Python/pnpm or separate OpenVPN/WireGuard/AmneziaWG package installation is needed on the Deck: clients are bundled and Decky supplies Python. V-Deck uses stock SteamOS network utilities; other Linux distributions and modified network stacks are not guaranteed.
 
 The plugin requests Decky's `root` flag because Linux tunnel interfaces, routes, `nftables`, and per-link DNS cannot be managed by the unprivileged `deck` user. The template placeholder `_root` does not enable elevated privileges in Decky Loader.
 
 ## Basic workflow
 
-1. Select import and choose a `.conf`, `.vpn`, or `.ovpn` file.
-2. Review the detected protocol and connection name.
+1. Select Add VPN, choose the protocol, then a `.conf`, `.vpn`, or `.ovpn` file.
+2. Enter a non-empty connection name and press Import. Picking a file alone does not save a profile.
 3. Enter OpenVPN credentials when required; they are stored separately from shared metadata.
-4. Turn the connection on. V-Deck starts the backend, verifies the interface and routes, applies DNS, and can activate the kill switch only after a successful connection.
+4. Turn the connection on. V-Deck checks the backend, interface, routes, DNS and traffic. On initial manual Connect the kill switch follows basic checks; during recovery its rules are prepared before those checks.
 5. Open diagnostics to inspect handshake, traffic proof, routing, and DNS.
 6. Manual OFF persists and is not silently undone after a reboot or network change.
 
 V-Deck passes both Decky File Picker values (`path` and `realpath`) to the backend and uses the first accessible regular file. Picker, parser, or storage failures are always shown in the UI with a stable error code. The sanitized technical import lifecycle is written to `DECKY_PLUGIN_LOG_DIR/vdeck.log` without keys, passwords, or configuration contents.
 
 ## Security and privacy
+
+### Compare IP before and after VPN
+
+On Linux the IP check explicitly loads the host CA bundle (`/etc/ssl/cert.pem`, then standard alternatives under `/etc/ssl/certs/`), not the frozen interpreter's build-time OpenSSL paths. Chain and hostname verification remain mandatory. Missing trust and rejected certificates return `EXTERNAL_IP_CA_UNAVAILABLE` and `EXTERNAL_IP_TLS_FAILED`; logs contain the CA count and numeric `verify_code`, never response or certificate contents.
+
+In diagnostics, press "Check external IPv4 now" with V-Deck OFF, then connect and repeat. Both timestamped samples show their provider and the active profile name. Network changes during a request invalidate the result. Samples are historical measurements, not a continuous live status, and are cleared on plugin backend restart.
+
+The implementation uses Python standard-library `urllib.request`, `ssl`, and `ipaddress`, querying [ipify](https://www.ipify.org/) (`api.ipify.org`) over HTTPS with `ipv4.icanhazip.com` as fallback. The service sees the requester's public address, never VPN configuration or credentials. TLS verification is mandatory; redirects and ambient proxies are disabled. Each provider has a 4-second timeout; the RPC waits up to 10 seconds. No new system packages are required.
+
+The check follows current system routing without switching VPN off, bypassing Kill Switch, or adding routes. V-Deck OFF does not mean another VPN is off. An IPv4 comparison is not a complete IPv6/DNS leak test or proof of full-tunnel routing.
 
 Every imported configuration is treated as hostile. V-Deck rejects OpenVPN command hooks, plugins, management directives, arbitrary output paths, absolute paths, traversal, unknown inline blocks, and symlink escapes. Native Amnezia `.vpn` decompression is size-bounded.
 
@@ -200,13 +234,13 @@ Cleanup is restricted to V-Deck ownership markers:
 - DNS is changed and reverted per V-Deck interface;
 - a process is stopped only when PID, executable, and Linux process start time still match.
 
-Connection directories use mode `0700` and sensitive files use `0600`. Secrets are never placed in process arguments. Log and report sanitizers redact WireGuard/AmneziaWG keys, passwords, tokens, certificates, private keys, and mask IP addresses. V-Deck collects no telemetry. External-IP requests occur only when diagnostics are manually refreshed or exported.
+Connection directories use mode `0700` and sensitive files use `0600`. Secrets are never placed in process arguments. Config contents are not logged; native stdout/stderr is reduced to recognized diagnostic phrases without arbitrary values. Exceptions include type/location/code, not locals. Exported reports mask IP addresses; technical logs may contain paths and network addresses. V-Deck collects no telemetry. External IPv4 requests require a dedicated diagnostics button. Opening/refreshing diagnostics, exporting a report and background ping do not contact IP services. Full samples are held in memory only and are not added to logs or exports.
 
 See `SECURITY.md` and `THIRD_PARTY_NOTICES.md` for more detail.
 
 ## Kill switch
 
-The kill switch is optional, initially disabled, and requires explicit acknowledgement. It activates after the first successful tunnel connection, permits loopback, established traffic, the VPN interface, and cached VPN endpoint IPs, then rejects other IPv4 and IPv6 output. On unexpected tunnel loss, it remains active while recovery runs. If a hostname endpoint changes address, V-Deck briefly permits DNS only to detected system DNS servers and immediately restores the strict rules. Manual OFF removes the table only after verifying V-Deck's ownership marker.
+The kill switch is optional, initially disabled, and requires explicit acknowledgement. On the initial manual Connect it activates after a successful connection; during auto-connect/recovery it permits the upcoming owned tunnel before traffic checks. It permits loopback, DHCP/IPv6 ND control traffic, the VPN interface, and cached VPN endpoint IPs, then rejects other IPv4 and IPv6 output. On unexpected tunnel loss, it remains active while recovery runs. If a hostname endpoint changes address, V-Deck briefly permits DNS only to detected system DNS servers and immediately restores the strict rules. Manual OFF removes the table only after verifying V-Deck's ownership marker.
 
 If this test build unexpectedly blocks networking, first turn the active connection off in the UI. Last-resort local recovery from Desktop Mode:
 
@@ -224,7 +258,7 @@ A future protocol can implement `VPNBackend` and register in one place without a
 
 ## Build and verification
 
-Plugin development requires Python 3.10+, Node.js 20+, and pnpm 9+. Docker is used only by maintainers and CI for reproducible Linux x86-64 component builds; users and Steam Deck do not need it. Go 1.25.14, Zig 0.15.2, upstream tags/commits, and release hashes are pinned in `backend/versions.json`.
+CI uses Python 3.10.21, Node.js 22.23.2 and pnpm 9.15.9 (not pnpm latest). Docker is used only by maintainers and CI for reproducible Linux x86-64 component builds; users and Steam Deck do not need it. Go 1.25.14, Zig 0.15.2, upstream tags/commits, and release hashes are pinned in `backend/versions.json`.
 
 ```text
 PYTHONPATH=py_modules python -m unittest discover -s tests -v
@@ -239,6 +273,7 @@ pnpm build
 docker build -f backend/Dockerfile --target binaries --output type=local,dest=release/native .
 python scripts/elf_audit.py release/native/*
 python scripts/elf_audit.py bin/amneziawg-go bin/awg bin/wireguard-go bin/wg bin/openvpn
+python scripts/fetch_sources.py
 python scripts/build_release.py
 python scripts/verify_release.py ../outputs/V-Deck-v0.1.0.zip
 python scripts/verify_source.py ../outputs/V-Deck-v0.1.0-source.zip
@@ -248,8 +283,9 @@ The release builder creates the required `V-Deck/` ZIP root, assigns Unix execut
 
 ## Test-release limitations
 
-- Gaming Mode layout, suspend/resume, Wi-Fi roaming, IPv6-provider behavior, and live VPN compatibility still require physical-device validation.
-- OpenVPN DNS is applied for local `dhcp-option DNS` directives. Options supplied only through server push require device testing.
+- Basic AWG and Wi-Fi OFF/ON were user-tested on one Deck, not every device/server. Suspend/resume, roaming between different networks, IPv6/DNS leak testing and long-term stability still need physical validation.
+- OpenVPN requires explicit local `route`/`redirect-gateway` and `dhcp-option DNS` directives. V-Deck owns route creation/cleanup and starts OpenVPN with `route-noexec`. Server-push-only routes/DNS are currently unsupported and return an explicit error before spawning the process. Live-server verification is still required.
+- WG `Table=off` and custom Table values are rejected explicitly instead of silently changing profile semantics.
 - OpenVPN built with wolfSSL does not support every legacy OpenSSL profile, especially old Blowfish configurations. Upgrade profiles to AES.
 - Version 0.1.0 does not provide a `vpn://` paste UI; import the exported `.vpn` file.
 - Decky Store acceptance of PolyForm Noncommercial has not been confirmed. The supported test distribution method is the GitHub release ZIP.

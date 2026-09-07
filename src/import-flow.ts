@@ -1,5 +1,38 @@
 import type { FilePickerRes } from "@decky/api";
-import type { Snapshot } from "./types";
+import type { ImportValidation, Protocol, Snapshot } from "./types";
+
+export function validateImportResponse(checked: ImportValidation): void {
+  if (
+    typeof checked.path !== "string" ||
+    !checked.path.trim() ||
+    typeof checked.display_name !== "string" ||
+    typeof checked.requires_username_password !== "boolean" ||
+    typeof checked.requires_key_passphrase !== "boolean"
+  ) {
+    throw new TypeError("INVALID_IMPORT_VALIDATION_RESPONSE");
+  }
+}
+
+export function prepareImport(
+  protocol: Protocol,
+  path: string,
+  name: string,
+  validation: ImportValidation | null,
+): string {
+  if (
+    !validation ||
+    !validation.success ||
+    !["wireguard", "amneziawg", "openvpn"].includes(protocol) ||
+    typeof path !== "string" ||
+    !path.trim() ||
+    path !== validation.path ||
+    typeof name !== "string" ||
+    !name.trim()
+  ) {
+    throw new TypeError("INVALID_IMPORT_FORM_STATE");
+  }
+  return name.trim();
+}
 
 export function pickerRpcPaths(
   picked: FilePickerRes,

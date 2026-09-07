@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 import json
 import platform
 import re
-import urllib.request
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,29 +13,15 @@ from typing import Any
 
 from .atomic import atomic_write_bytes
 from .backends.registry import BackendRegistry
+from .backends.wireguard import handshake_probe_target
 from .binaries import BinaryManager
+from .dns import DnsManager
 from .logging_utils import ErrorHistory
 from .models import CheckStatus
 from .network import FirewallManager, NetworkInspector
 from .runner import CommandRunner
 from .security import sanitize, sanitize_report
 from .storage import VDeckStore
-
-IP_PROVIDERS = ("https://api64.ipify.org", "https://icanhazip.com", "https://ifconfig.me/ip")
-
-
-def _external_ip() -> str | None:
-    for provider in IP_PROVIDERS:
-        try:
-            if not provider.startswith("https://"):
-                continue
-            request = urllib.request.Request(provider, headers={"User-Agent": "V-Deck/0.1.0"})  # noqa: S310
-            with urllib.request.urlopen(request, timeout=4) as response:  # noqa: S310
-                value = response.read(128).decode().strip()
-            return str(ipaddress.ip_address(value))
-        except (OSError, ValueError):
-            continue
-    return None
 
 
 def _mask_ip(value: str | None) -> str | None:
@@ -77,17 +61,17 @@ class DiagnosticsManager:
         self.binaries = binaries
         self.errors = errors
 
-    async def collect(self, connection_id: str, *, include_external_ip: bool = True) -> dict[str, Any]:
+    async def collect(self, connection_id: str, *, include_external_ip: bool = False) -> dict[str, Any]:
         metadata = self.store.get(connection_id)
         runtime = self.store.load_runtime()
         backend_available = True
         backend = self.registry.get(metadata.protocol)
+        active = runtime.connection_id == connection_id
         try:
-            status = await backend.diagnostics(metadata, runtime)
+            status = await backend.diagnostics(metadata, runtime) if active else {"connected": False, "tunnel": False}
         except Exception:
             backend_available = False
             status = {"connected": False, "tunnel": False, "rx_bytes": 0, "tx_bytes": 0}
-        active = runtime.connection_id == connection_id
         info = self.store.parsed_runtime_info(connection_id)
         configured_routes = [str(item) for item in info.get("allowed_ips", [])]
         full = any(item in {"0.0.0.0/0", "::/0"} for item in configured_routes)
@@ -97,12 +81,22 @@ class DiagnosticsManager:
         ping_available = True
         if active and status.get("connected"):
             try:
-                ping = await self.runner.run(["ping", "-c", "1", "-W", "3", "1.1.1.1"], check=False, timeout=5)
+                target = handshake_probe_target(configured_routes)
+                if not target or not runtime.interface:
+                    raise ValueError("No tunnel probe destination")
+                ping = await self.runner.run(
+                    ["ping", "-6" if ":" in target else "-4", "-I", runtime.interface, "-c", "1", "-W", "3", target],
+                    check=False,
+                    timeout=5,
+                )
                 match = re.search(r"time[=<]([0-9.]+)\s*ms", ping.stdout)
                 if match:
                     ping_ms = round(float(match.group(1)))
-                    metadata.last_ping_ms = ping_ms
-                    self.store.update_metadata(metadata)
+                    # A probe yields: do not resurrect a deleted profile or
+                    # overwrite a concurrent rename with its stale metadata.
+                    current = self.store.get(connection_id)
+                    current.last_ping_ms = ping_ms
+                    self.store.update_metadata(current)
             except Exception:
                 ping_available = False
             if backend_available:
@@ -131,15 +125,13 @@ class DiagnosticsManager:
             ipv6_status = CheckStatus.UNKNOWN
             ipv6_detail = "IPv6 inspection unavailable"
         elif ipv6_underlay and not vpn_has_ipv6:
-            ipv6_status = CheckStatus.OK if runtime.firewall_active else CheckStatus.WARNING
-            ipv6_detail = "Direct IPv6 is blocked" if runtime.firewall_active else "Possible IPv6 leak"
-        external = (
-            await asyncio.to_thread(_external_ip)
-            if include_external_ip and active and status.get("connected")
-            else None
-        )
+            blocked = active and (runtime.firewall_active or getattr(runtime, "ipv6_guard", False))
+            ipv6_status = CheckStatus.OK if blocked else CheckStatus.WARNING
+            ipv6_detail = "Direct IPv6 is blocked" if blocked else "Possible IPv6 leak"
+        # Public-IP requests are now a separate explicit user action. Ordinary
+        # diagnostics, background ping and exported reports never send one.
         duration = None
-        if runtime.started_at:
+        if active and runtime.started_at:
             try:
                 started = datetime.fromisoformat(runtime.started_at)
                 duration = max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
@@ -188,7 +180,6 @@ class DiagnosticsManager:
                 else CheckStatus.ERROR
             ),
             "ipv6": check(ipv6_status, ipv6_detail),
-            "external_ip": check(CheckStatus.OK if external else CheckStatus.UNKNOWN),
         }
         overall = (
             CheckStatus.ERROR
@@ -203,13 +194,13 @@ class DiagnosticsManager:
             "overall": overall.value,
             "protocol": metadata.protocol,
             "checks": checks,
-            "external_ip": external,
+            "external_ip": None,
             "ping_ms": ping_ms if ping_ms is not None else metadata.last_ping_ms,
             "session_seconds": duration,
             "rx_bytes": status.get("rx_bytes", 0),
             "tx_bytes": status.get("tx_bytes", 0),
-            "interface": runtime.interface,
-            "state": runtime.state,
+            "interface": runtime.interface if active else None,
+            "state": runtime.state if active else "DISCONNECTED",
         }
 
     async def export(self, connection_id: str, decky_version: str | None = None) -> Path:
@@ -230,6 +221,7 @@ class DiagnosticsManager:
             "architecture": platform.machine(),
             "platform": platform.platform(),
             "backend_versions": self.binaries.versions(),
+            "network_environment": await DnsManager(self.runner).environment(),
             "connection": {"display_name": metadata.display_name, "id": metadata.id, "protocol": metadata.protocol},
             "diagnostics": diagnostics,
             "firewall_active": await self._firewall_active(),

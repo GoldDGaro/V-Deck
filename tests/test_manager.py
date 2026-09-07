@@ -5,12 +5,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from vdeck.backends.registry import BackendRegistry
 from vdeck.errors import VDeckError
 from vdeck.logging_utils import ErrorHistory
 from vdeck.manager import VPNManager
 from vdeck.models import ConnectionState, DesiredState, Protocol
+from vdeck.network import interface_name
 from vdeck.storage import VDeckStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -38,7 +40,7 @@ class FakeBackend:
     def __init__(self, store):
         self.store = store
         self.inspector = FakeInspector()
-        self.context = SimpleNamespace(inspector=self.inspector)
+        self.context = SimpleNamespace(inspector=self.inspector, dns=SimpleNamespace(cleanup=AsyncMock()))
         self.fail_start = False
         self.failures_remaining = 0
         self.connected = False
@@ -73,6 +75,9 @@ class FakeBackend:
 
     async def health(self, metadata, runtime):
         return self.health_result or await self.status(metadata, runtime)
+
+    async def verify_connected(self, metadata, runtime):
+        return await self.status(metadata, runtime)
 
     async def resolve_endpoint_cache(self, metadata, runtime, *, force=False):
         endpoints = self.store.parsed_runtime_info(metadata.id).get("endpoints", [])
@@ -316,7 +321,7 @@ class ManagerTests(unittest.IsolatedAsyncioTestCase):
         await self.manager.health_check()
         await self.manager._recovery_task
         self.assertEqual(self.backend.inspector.resolve_calls, 2)
-        self.assertIn(("", ["203.0.113.10"], ["192.0.2.53"]), self.firewall.rules)
+        self.assertIn((interface_name(self.first.id), ["203.0.113.10"], ["192.0.2.53"]), self.firewall.rules)
         self.assertEqual(self.firewall.rules[-1][1], ["203.0.113.11"])
         self.assertEqual(self.firewall.rules[-1][2], [])
 
@@ -324,6 +329,78 @@ class ManagerTests(unittest.IsolatedAsyncioTestCase):
         self.firewall.enabled = True
         await self.manager.initialize()
         self.assertFalse(self.firewall.enabled)
+
+    def enable_boot_autoconnect(self):
+        state = self.store.load_state()
+        state.auto_connect = True
+        state.desired_state = DesiredState.ON.value
+        state.last_active_connection_id = self.first.id
+        self.store.save_state(state)
+
+    async def test_cold_boot_retries_missing_route_without_turning_desired_off(self):
+        self.enable_boot_autoconnect()
+        original = self.backend.start
+        calls = 0
+
+        async def start(metadata, runtime):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise VDeckError("ENDPOINT_ROUTE_INVALID", "Network is unreachable")
+            return await original(metadata, runtime)
+
+        self.backend.start = start
+        await self.manager.initialize()
+        self.assertIsNotNone(self.manager._recovery_task)
+        await self.manager._recovery_task
+        self.assertEqual(calls, 2)
+        self.assertEqual(self.store.load_runtime().state, "CONNECTED")
+        self.assertEqual(self.store.load_state().desired_state, "ON")
+
+    async def test_cold_boot_exhaustion_retries_on_network_event_even_without_prior_handshake(self):
+        self.enable_boot_autoconnect()
+        self.backend.fail_start = True
+        await self.manager.initialize()
+        await self.manager._recovery_task
+        self.assertFalse(self.store.load_runtime().established_once)
+        self.assertEqual(self.store.load_runtime().error_code, "RECOVERY_EXHAUSTED")
+        self.backend.fail_start = False
+        await self.manager.network_event()
+        await self.manager._recovery_task
+        self.assertEqual(self.store.load_runtime().state, "CONNECTED")
+
+    async def test_manual_off_cancels_cold_boot_retry_and_network_events_cannot_revive_it(self):
+        self.enable_boot_autoconnect()
+        self.manager.recovery_delays = (60,)
+        await self.manager.initialize()
+        await asyncio.sleep(0)
+        task = self.manager._recovery_task
+        await self.manager.stop(manual=True)
+        await asyncio.gather(task, return_exceptions=True)
+        await self.manager.network_event()
+        self.assertEqual(self.backend.starts, 0)
+        self.assertEqual(self.store.load_state().desired_state, "OFF")
+        self.assertEqual(self.store.load_runtime().state, "DISCONNECTED")
+
+    async def test_manual_profile_switch_cancels_pending_cold_boot(self):
+        self.enable_boot_autoconnect()
+        self.manager.recovery_delays = (60,)
+        await self.manager.initialize()
+        await asyncio.sleep(0)
+        await self.manager.start(self.second.id)
+        self.assertEqual(self.store.load_runtime().connection_id, self.second.id)
+        self.assertEqual(self.store.load_runtime().state, "CONNECTED")
+
+    async def test_recovery_does_not_allow_an_unowned_preexisting_tunnel(self):
+        self.enable_boot_autoconnect()
+        state = self.store.load_state()
+        state.kill_switch = True
+        self.store.save_state(state)
+        await self.manager.initialize()
+        self.backend.inspector.interface_exists = AsyncMock(return_value=True)
+        await self.manager._recovery_task
+        self.assertEqual(self.backend.starts, 0)
+        self.assertFalse(self.firewall.rules)
 
 
 class RegistryTests(unittest.TestCase):

@@ -13,6 +13,7 @@ MODULE_ROOT = PLUGIN_ROOT / "py_modules"
 if str(MODULE_ROOT) not in sys.path:
     sys.path.insert(0, str(MODULE_ROOT))
 
+from vdeck.import_logging import log_import_event  # noqa: E402
 from vdeck.service import VDeckService  # noqa: E402
 
 
@@ -40,6 +41,9 @@ class Plugin:
 
     async def get_snapshot(self) -> dict[str, Any]:
         return await self.service.get_snapshot()
+
+    async def log_import_event(self, event: str, details: dict[str, Any]) -> dict[str, Any]:
+        return log_import_event(self.service.logger, event, details)
 
     async def import_connection(
         self,
@@ -79,6 +83,9 @@ class Plugin:
 
     async def get_diagnostics(self, connection_id: str) -> dict[str, Any]:
         return await self.service.get_diagnostics(connection_id)
+
+    async def check_external_ip(self) -> dict[str, Any]:
+        return await self.service.check_external_ip()
 
     async def export_diagnostics(self, connection_id: str, decky_version: str = "") -> dict[str, Any]:
         detected_version = decky_version or str(getattr(decky, "DECKY_VERSION", ""))

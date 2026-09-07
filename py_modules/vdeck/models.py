@@ -94,6 +94,8 @@ class RuntimeState:
     owned_routes: list[dict[str, Any]] = field(default_factory=list)
     endpoint_cache: dict[str, list[str]] = field(default_factory=dict)
     firewall_active: bool = False
+    ipv6_guard: bool = False
+    stage: str | None = None
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> RuntimeState:

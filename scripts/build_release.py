@@ -28,6 +28,9 @@ INSTALL_FILES = {
     "THIRD_PARTY_NOTICES.md",
     "CHANGELOG.md",
     "MANUAL_TESTS_STEAM_DECK.md",
+    "USER_GUIDE_RU.md",
+    "USER_GUIDE_EN.md",
+    "VALIDATION.md",
     "backend/versions.json",
 }
 SOURCE_REPOSITORIES = (
