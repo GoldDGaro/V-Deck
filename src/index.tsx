@@ -13,9 +13,10 @@ import {
   openFilePicker,
   toaster,
 } from "@decky/api";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FaNetworkWired } from "react-icons/fa";
 import {
+  checkExternalIp,
   connect,
   deleteConnection,
   disconnect,
@@ -28,7 +29,19 @@ import {
   validateImport,
 } from "./api";
 import { displayRpcError, t, type Language, type TranslationKey } from "./i18n";
-import { pickerRpcPaths, snapshotContainsConnection } from "./import-flow";
+import {
+  pickerRpcPaths,
+  prepareImport,
+  snapshotContainsConnection,
+  validateImportResponse,
+} from "./import-flow";
+import {
+  getImportLog,
+  importErrorCode,
+  importErrorKind,
+  logImport,
+  subscribeImportLog,
+} from "./import-log";
 import {
   connectionStatus,
   formatBytes,
@@ -39,6 +52,7 @@ import {
 import type {
   Connection,
   Diagnostics,
+  ExternalIpChecks,
   ImportValidation,
   Protocol,
   RpcResponse,
@@ -75,8 +89,16 @@ const rowStyle: React.CSSProperties = {
 };
 const actionStyle: React.CSSProperties = {
   minWidth: 0,
-  flex: 1,
-  padding: "7px 5px",
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "8px 10px",
+  height: "auto",
+  minHeight: 38,
+  fontSize: 14,
+  lineHeight: "20px",
+  whiteSpace: "normal",
+  overflowWrap: "anywhere",
+  overflow: "hidden",
 };
 
 function protocolLabel(protocol: Protocol): string {
@@ -114,15 +136,55 @@ function ensureSuccess(
 function unexpectedImportError(
   language: Language,
   code:
-    "VALIDATE_IMPORT_RPC_FAILED" | "IMPORT_RPC_FAILED" | "IMPORT_NOT_VISIBLE",
+    | "VALIDATE_IMPORT_RPC_FAILED"
+    | "IMPORT_RPC_FAILED"
+    | "IMPORT_NOT_VISIBLE"
+    | "IMPORT_FRONTEND_FAILED"
+    | "IMPORT_REFRESH_FAILED",
 ): string {
   return `${t(language, "importFailed")}\n${code}`;
+}
+
+function ImportDebugLog({
+  language,
+}: {
+  language: Language;
+}): React.ReactElement | null {
+  const [lines, setLines] = useState(getImportLog);
+  useEffect(() => {
+    setLines(getImportLog());
+    return subscribeImportLog(() => setLines(getImportLog()));
+  }, []);
+  const [expanded, setExpanded] = useState(false);
+  if (!lines.length) return null;
+  return (
+    <PanelSectionRow>
+      <ButtonItem layout="below" onClick={() => setExpanded(!expanded)}>
+        {t(language, "importDebugLog")}
+      </ButtonItem>
+      {expanded ? (
+        <pre
+          style={{
+            ...cardStyle,
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            fontSize: 11,
+          }}
+        >
+          {lines.join("\n")}
+        </pre>
+      ) : null}
+    </PanelSectionRow>
+  );
 }
 
 function VDeckContent(): React.ReactElement {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [page, setPage] = useState<Page>("main");
   const [busy, setBusy] = useState(false);
+  const operationInFlight = useRef(false);
+  const importInFlight = useRef(false);
+  const pickerInFlight = useRef(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<Connection | null>(null);
   const [protocol, setProtocol] = useState<Protocol>("amneziawg");
@@ -133,6 +195,10 @@ function VDeckContent(): React.ReactElement {
   const [password, setPassword] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [ipChecks, setIpChecks] = useState<ExternalIpChecks>({
+    before: null,
+    after: null,
+  });
   const language: Language = snapshot?.resolved_language ?? "en";
 
   const refresh = useCallback(async () => {
@@ -142,25 +208,84 @@ function VDeckContent(): React.ReactElement {
   }, []);
 
   useEffect(() => {
+    logImport("import UI mounted");
     void refresh().catch((reason: unknown) => setError(String(reason)));
     const timer = window.setInterval(
-      () => void refresh().catch(() => undefined),
+      () =>
+        void refresh().catch((reason: unknown) =>
+          setError(
+            reason instanceof Error ? reason.message : "SNAPSHOT_FAILED",
+          ),
+        ),
       5000,
     );
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      logImport("import UI unmounted");
+    };
   }, [refresh]);
+
+  useEffect(() => {
+    if (page === "import")
+      logImport("import form rendered", {
+        protocol,
+        filePathPresent: Boolean(filePath),
+        namePresent: Boolean(name.trim()),
+        validationPresent: Boolean(validation),
+        busy,
+      });
+  }, [page, protocol, filePath, name, validation, busy]);
+
+  const importToast = (message: string, critical = false) => {
+    try {
+      toaster.toast({
+        title: critical ? t(language, "importFailed") : "V-Deck",
+        body: message,
+        critical,
+      });
+    } catch (reason: unknown) {
+      logImport("toast failed", { errorKind: importErrorKind(reason) });
+    }
+  };
+
+  const checkImportResponse = (
+    response: RpcResponse,
+    heading: TranslationKey = "importFailed",
+  ) => {
+    if (!response.success)
+      throw new DisplayedRpcError(
+        displayRpcError(
+          language,
+          { code: importErrorCode(response.code) },
+          heading,
+        ),
+      );
+  };
 
   const run = useCallback(
     async (operation: () => Promise<RpcResponse>, after?: () => void) => {
+      if (operationInFlight.current) return;
+      operationInFlight.current = true;
       setBusy(true);
       setError("");
       try {
-        ensureSuccess(await operation(), language);
+        const response = await operation();
+        if (!response.success) {
+          // A snapshot outage must not replace the actual Connect/cleanup error.
+          await refresh().catch(() => undefined);
+          ensureSuccess(response, language);
+        }
         await refresh();
+        ensureSuccess(response, language);
         after?.();
       } catch (reason: unknown) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(
+          reason instanceof DisplayedRpcError
+            ? reason.message
+            : "OPERATION_RPC_FAILED",
+        );
       } finally {
+        operationInFlight.current = false;
         setBusy(false);
       }
     },
@@ -168,15 +293,19 @@ function VDeckContent(): React.ReactElement {
   );
 
   const beginImport = async (nextProtocol: Protocol) => {
+    if (pickerInFlight.current || importInFlight.current) return;
+    pickerInFlight.current = true;
+    setBusy(true);
     setProtocol(nextProtocol);
     setError("");
-    console.info("[V-Deck import] protocol selected", nextProtocol);
+    logImport("protocol selected", { protocol: nextProtocol });
     const extensions =
       nextProtocol === "amneziawg"
         ? ["conf", "vpn"]
         : nextProtocol === "wireguard"
           ? ["conf"]
           : ["ovpn"];
+    let validationReturned = false;
     try {
       const picked = await openFilePicker(
         FileSelectionType.FILE,
@@ -189,110 +318,222 @@ function VDeckContent(): React.ReactElement {
         false,
       );
       const [pickedPath, pickedRealpath] = pickerRpcPaths(picked);
-      console.info("[V-Deck import] file selected", {
-        path: pickedPath,
-        realpath: pickedRealpath,
+      logImport("file selected", {
+        protocol: nextProtocol,
+        filePathPresent: Boolean(pickedPath || pickedRealpath),
       });
-      console.info("[V-Deck import] validate_import started", nextProtocol);
+      logImport("validate_import started", { protocol: nextProtocol });
       const checked = await validateImport(
         nextProtocol,
         pickedPath,
         pickedRealpath,
       );
-      ensureSuccess(checked, language, "validationFailed");
-      console.info("[V-Deck import] validate_import succeeded", nextProtocol);
+      validationReturned = true;
+      checkImportResponse(checked, "validationFailed");
+      validateImportResponse(checked);
+      logImport("validate_import succeeded", { protocol: nextProtocol });
       setFilePath(checked.path);
       setValidation(checked);
       setName(checked.display_name);
+      setUsername("");
+      setPassword("");
+      setPassphrase("");
       setPage("import");
     } catch (reason: unknown) {
-      if (typeof reason === "string" && reason.toLowerCase().includes("cancel"))
+      if (reason === "User canceled") {
+        logImport("file picker cancelled");
         return;
-      console.error("[V-Deck import] validate_import failed", reason);
+      }
+      const code = validationReturned
+        ? "IMPORT_FRONTEND_FAILED"
+        : "VALIDATE_IMPORT_RPC_FAILED";
+      logImport("validate_import failed", {
+        protocol: nextProtocol,
+        stage: "validation",
+        code,
+        errorKind: importErrorKind(reason),
+      });
       const message =
         reason instanceof DisplayedRpcError
           ? reason.message
-          : unexpectedImportError(language, "VALIDATE_IMPORT_RPC_FAILED");
+          : unexpectedImportError(language, code);
       setError(message);
-      toaster.toast({
-        title: t(language, "importFailed"),
-        body: message,
-        critical: true,
-      });
+      importToast(message, true);
+    } finally {
+      pickerInFlight.current = false;
+      setBusy(false);
     }
   };
 
   const importSelected = async () => {
-    setBusy(true);
-    setError("");
-    console.info("[V-Deck import] import_connection started", protocol);
+    if (importInFlight.current) {
+      logImport("import blocked", { busy: true, rpcStarted: true });
+      return;
+    }
+    let stage: "preflight" | "rpc" | "refresh" | "complete" = "preflight";
+    let rpcReturned = false;
     try {
+      logImport("importSelected entered", {
+        protocol,
+        filePathPresent: Boolean(filePath),
+        namePresent: Boolean(name?.trim()),
+        validationPresent: Boolean(validation),
+        busy,
+        rpcStarted: false,
+      });
+      importInFlight.current = true;
+      setBusy(true);
+      setError("");
+      const importName = prepareImport(protocol, filePath, name, validation);
+      stage = "rpc";
+      logImport("RPC import_connection starting", {
+        protocol,
+        rpcStarted: true,
+      });
       const response = await importConnection(
         protocol,
         filePath,
-        name,
+        importName,
         username,
         password,
         passphrase,
       );
-      ensureSuccess(response, language, "importFailed");
+      rpcReturned = true;
+      logImport(
+        response.success
+          ? "RPC import_connection returned success"
+          : "RPC import_connection returned failure",
+        {
+          protocol,
+          code: importErrorCode(response.code),
+          rpcStarted: true,
+        },
+      );
+      checkImportResponse(response);
       if (!response.connection?.id) {
         throw new DisplayedRpcError(
           unexpectedImportError(language, "IMPORT_RPC_FAILED"),
         );
       }
+      stage = "refresh";
+      logImport("refresh after import started", { protocol, rpcStarted: true });
       const refreshed = await getSnapshot();
-      ensureSuccess(refreshed, language, "importFailed");
+      checkImportResponse(refreshed);
+      logImport("fresh snapshot", {
+        connections: refreshed.connections.length,
+        rpcStarted: true,
+      });
       if (!snapshotContainsConnection(refreshed, response.connection.id)) {
         throw new DisplayedRpcError(
           unexpectedImportError(language, "IMPORT_NOT_VISIBLE"),
         );
       }
-      console.info("[V-Deck import] import_connection succeeded", {
-        id: response.connection.id,
-        protocol: response.connection.protocol,
-      });
+      stage = "complete";
       setSnapshot(refreshed);
-      toaster.toast({ title: "V-Deck", body: t(language, "imported") });
       setPage("main");
       setUsername("");
       setPassword("");
       setPassphrase("");
+      logImport("import completed", { protocol, rpcStarted: true });
+      importToast(t(language, "imported"));
     } catch (reason: unknown) {
-      console.error("[V-Deck import] import_connection failed", reason);
+      if (stage === "rpc" && !rpcReturned)
+        logImport("RPC import_connection returned failure", {
+          protocol,
+          code: "IMPORT_RPC_FAILED",
+          errorKind: importErrorKind(reason),
+          rpcStarted: true,
+        });
+      const code =
+        stage === "preflight"
+          ? "IMPORT_FRONTEND_FAILED"
+          : stage === "refresh"
+            ? "IMPORT_REFRESH_FAILED"
+            : "IMPORT_RPC_FAILED";
+      logImport("import failed", {
+        protocol,
+        stage,
+        code,
+        errorKind: importErrorKind(reason),
+        rpcStarted: stage !== "preflight",
+      });
       const message =
         reason instanceof DisplayedRpcError
           ? reason.message
-          : unexpectedImportError(language, "IMPORT_RPC_FAILED");
+          : unexpectedImportError(language, code);
       setError(message);
-      toaster.toast({
-        title: t(language, "importFailed"),
-        body: message,
-        critical: true,
-      });
+      importToast(message, true);
     } finally {
+      importInFlight.current = false;
       setBusy(false);
     }
   };
 
   const openDiagnostics = async (connection: Connection) => {
+    if (operationInFlight.current) return;
+    operationInFlight.current = true;
     setSelected(connection);
     setDiagnostics(null);
     setPage("diagnostics");
     setBusy(true);
-    const response = await getDiagnostics(connection.id);
-    setBusy(false);
-    if (response.success) setDiagnostics(response.diagnostics);
-    else setError(response.message ?? response.code);
+    setError("");
+    try {
+      const response = await getDiagnostics(connection.id);
+      ensureSuccess(response, language);
+      setDiagnostics(response.diagnostics);
+      if (response.diagnostics.external_ip_checks)
+        setIpChecks(response.diagnostics.external_ip_checks);
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof DisplayedRpcError
+          ? reason.message
+          : "DIAGNOSTICS_RPC_FAILED",
+      );
+    } finally {
+      operationInFlight.current = false;
+      setBusy(false);
+    }
+  };
+
+  const measureExternalIp = async () => {
+    if (operationInFlight.current) return;
+    operationInFlight.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await checkExternalIp();
+      ensureSuccess(response, language);
+      if (!response.external_ip_checks) throw new Error("Invalid IP response");
+      setIpChecks(response.external_ip_checks);
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof DisplayedRpcError
+          ? reason.message
+          : "EXTERNAL_IP_RPC_FAILED",
+      );
+    } finally {
+      operationInFlight.current = false;
+      setBusy(false);
+    }
   };
 
   if (!snapshot) {
-    return <PanelSection title={t(language, "loading")} />;
+    return (
+      <PanelSection title={t(language, "loading")}>
+        {error ? <div role="alert">{error}</div> : null}
+      </PanelSection>
+    );
   }
 
-  const errorView = error ? (
+  const visibleError =
+    error ||
+    (snapshot.runtime.error_code
+      ? displayRpcError(language, { code: snapshot.runtime.error_code })
+      : "");
+  const errorView = visibleError ? (
     <PanelSectionRow>
       <div
+        role="alert"
         style={{
           ...cardStyle,
           color: "#ff9d9d",
@@ -300,7 +541,7 @@ function VDeckContent(): React.ReactElement {
           whiteSpace: "pre-wrap",
         }}
       >
-        {error}
+        {visibleError}
       </div>
     </PanelSectionRow>
   ) : null;
@@ -312,7 +553,11 @@ function VDeckContent(): React.ReactElement {
           {errorView}
           {(["amneziawg", "wireguard", "openvpn"] as Protocol[]).map((item) => (
             <PanelSectionRow key={item}>
-              <ButtonItem layout="below" onClick={() => void beginImport(item)}>
+              <ButtonItem
+                layout="below"
+                disabled={busy}
+                onClick={() => void beginImport(item)}
+              >
                 {protocolLabel(item)}
               </ButtonItem>
             </PanelSectionRow>
@@ -322,6 +567,7 @@ function VDeckContent(): React.ReactElement {
               {t(language, "back")}
             </ButtonItem>
           </PanelSectionRow>
+          <ImportDebugLog language={language} />
         </PanelSection>
       </div>
     );
@@ -379,16 +625,31 @@ function VDeckContent(): React.ReactElement {
             <ButtonItem
               layout="below"
               disabled={busy || !name.trim()}
-              onClick={() => void importSelected()}
+              onClick={() => {
+                logImport("import button pressed");
+                void importSelected();
+              }}
             >
               {t(language, "import")}
             </ButtonItem>
           </PanelSectionRow>
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={() => setPage("main")}>
+            {busy
+              ? t(language, "importWorking")
+              : !name.trim()
+                ? t(language, "importNameRequired")
+                : null}
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              disabled={busy}
+              onClick={() => setPage("main")}
+            >
               {t(language, "cancel")}
             </ButtonItem>
           </PanelSectionRow>
+          <ImportDebugLog language={language} />
         </PanelSection>
       </div>
     );
@@ -506,6 +767,62 @@ function VDeckContent(): React.ReactElement {
           title={`${t(language, "diagnostics")} · ${truncateName(selected.display_name, 28)}`}
         >
           {errorView}
+          <PanelSectionRow>
+            <div style={{ ...cardStyle, overflowWrap: "anywhere" }}>
+              <strong>{t(language, "deviceExternalIp")}</strong>
+              <p style={{ fontSize: 12 }}>{t(language, "ipPrivacy")}</p>
+              {(["before", "after"] as const).map((slot) => {
+                const sample = ipChecks[slot];
+                return (
+                  <div key={slot} style={{ marginBottom: 10 }}>
+                    <div>
+                      {t(language, slot === "before" ? "ipBefore" : "ipAfter")}
+                    </div>
+                    <strong>{sample?.ip ?? "—"}</strong>
+                    {sample ? (
+                      <div style={{ fontSize: 12 }}>
+                        {sample.connection_name ? (
+                          <div>{sample.connection_name}</div>
+                        ) : null}
+                        <div>
+                          {new Date(sample.checked_at).toLocaleString(language)}
+                        </div>
+                        <div>{sample.provider}</div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {ipChecks.before && ipChecks.after ? (
+                <div>
+                  {t(
+                    language,
+                    ipChecks.before.ip === ipChecks.after.ip
+                      ? "ipUnchanged"
+                      : "ipChanged",
+                  )}
+                </div>
+              ) : null}
+              <p style={{ fontSize: 12 }}>{t(language, "ipRoutingNote")}</p>
+            </div>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              disabled={busy}
+              onClick={() => void measureExternalIp()}
+            >
+              <span
+                style={{
+                  display: "block",
+                  whiteSpace: "normal",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {t(language, "checkExternalIp")}
+              </span>
+            </ButtonItem>
+          </PanelSectionRow>
           {diagnostics ? (
             <>
               {Object.entries(diagnostics.checks).map(([key, value]) => (
@@ -532,11 +849,6 @@ function VDeckContent(): React.ReactElement {
                   </div>
                 </PanelSectionRow>
               ))}
-              <PanelSectionRow>
-                <div style={cardStyle}>
-                  {t(language, "external_ip")}: {diagnostics.external_ip ?? "—"}
-                </div>
-              </PanelSectionRow>
               <PanelSectionRow>
                 <div style={cardStyle}>
                   {t(language, "ping")}:{" "}
@@ -686,11 +998,11 @@ function VDeckContent(): React.ReactElement {
           const active =
             snapshot.runtime.connection_id === connection.id &&
             status === "CONNECTED";
-          const transitional = [
-            "CONNECTING",
-            "DISCONNECTING",
-            "RECOVERING",
-          ].includes(status);
+          const transitional = ["CONNECTING", "DISCONNECTING"].includes(status);
+          const recoveringOn =
+            snapshot.runtime.connection_id === connection.id &&
+            snapshot.settings.desired_state === "ON" &&
+            ["RECOVERING", "ERROR"].includes(status);
           return (
             <PanelSectionRow key={connection.id}>
               <div style={cardStyle}>
@@ -743,7 +1055,7 @@ function VDeckContent(): React.ReactElement {
                       ? t(language, "connected")
                       : t(language, statusKey(status))
                   }
-                  checked={active}
+                  checked={active || recoveringOn}
                   disabled={
                     busy || transitional || Boolean(connection.import_error)
                   }
@@ -753,7 +1065,14 @@ function VDeckContent(): React.ReactElement {
                     )
                   }
                 />
-                <div style={{ ...rowStyle, marginTop: 6 }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 1fr)",
+                    gap: 6,
+                    marginTop: 6,
+                  }}
+                >
                   <DialogButton
                     style={actionStyle}
                     onClick={() => void openDiagnostics(connection)}
@@ -794,6 +1113,7 @@ function VDeckContent(): React.ReactElement {
             {t(language, "settings")}
           </ButtonItem>
         </PanelSectionRow>
+        <ImportDebugLog language={language} />
       </PanelSection>
     </div>
   );
@@ -801,6 +1121,9 @@ function VDeckContent(): React.ReactElement {
 
 export default definePlugin(() => ({
   name: "V-Deck",
+  // Decky removes content when QAM is hidden unless this is set. Keep the
+  // pending file-picker promise and validated form attached to the same instance.
+  alwaysRender: true,
   titleView: <div className={staticClasses.Title}>V-Deck</div>,
   content: <VDeckContent />,
   icon: <FaNetworkWired />,

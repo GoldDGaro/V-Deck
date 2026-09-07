@@ -74,6 +74,7 @@ export interface DiagnosticCheck {
 }
 
 export interface Diagnostics {
+  external_ip_checks?: ExternalIpChecks;
   overall: "OK" | "WARNING" | "ERROR";
   protocol: Protocol;
   checks: Record<string, DiagnosticCheck>;
@@ -88,4 +89,23 @@ export interface Diagnostics {
 
 export interface DiagnosticsResponse extends RpcResponse {
   diagnostics: Diagnostics;
+}
+
+export interface ExternalIpSample {
+  ip: string;
+  family: "IPv4";
+  provider: string;
+  checked_at: string;
+  vpn_state: RuntimeStatus;
+  connection_id: string | null;
+  connection_name: string | null;
+}
+
+export interface ExternalIpChecks {
+  before: ExternalIpSample | null;
+  after: ExternalIpSample | null;
+}
+
+export interface ExternalIpResponse extends RpcResponse {
+  external_ip_checks: ExternalIpChecks;
 }

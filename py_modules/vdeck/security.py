@@ -20,6 +20,10 @@ _JSON_SECRET = re.compile(
 _PEM_PRIVATE = re.compile(r"(?is)-----BEGIN (?:ENCRYPTED )?PRIVATE KEY-----.*?-----END (?:ENCRYPTED )?PRIVATE KEY-----")
 _INLINE_KEY = re.compile(r"(?is)<key>.*?</key>")
 _AUTH_BLOCK = re.compile(r"(?im)^(auth-user-pass\s+)(\S+).*$")
+_INLINE_SECRET = re.compile(
+    r"(?i)(\b(?:PrivateKey|PresharedKey|HeaderProtectionKey|Password|Passphrase|auth-token|token)\s*[=:]\s*)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
+)
 _IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 _IPV6 = re.compile(r"(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![0-9A-Fa-f:])")
 
@@ -31,6 +35,7 @@ def sanitize(text: object) -> str:
     value = _KEY_VALUE_SECRET.sub(r"\1[REDACTED]", value)
     value = _JSON_SECRET.sub(r'\1"[REDACTED]"', value)
     value = _AUTH_BLOCK.sub(r"\1[REDACTED]", value)
+    value = _INLINE_SECRET.sub(r"\1[REDACTED]", value)
     return value
 
 

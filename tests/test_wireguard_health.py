@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from vdeck.backends.amneziawg import AmneziaWGBackend
 from vdeck.backends.wireguard import WireGuardBackend, resolved_wireguard_config
@@ -40,6 +41,8 @@ class HealthRunner:
             return CommandResult(tuple(rendered), 0, routes, "")
         if rendered[:4] == ["ip", "-6", "route", "show"]:
             return CommandResult(tuple(rendered), 0, "", "")
+        if rendered[:4] == ["ip", "-4", "route", "get"]:
+            return CommandResult(tuple(rendered), 0, "1.1.1.1 dev vdeck-12345678", "")
         if rendered and rendered[0] == "ping":
             return CommandResult(tuple(rendered), self.probe_returncode, "", "timeout")
         if "show" in rendered and "dump" in rendered:
@@ -62,7 +65,11 @@ def backend_for(backend_type, runner):
         routes=object(),
         dns=object(),
     )
-    return backend_type(context)
+    backend = backend_type(context)
+    # These tests isolate traffic/handshake semantics; real DNS verification is
+    # exercised by RuntimePipelineTests with both resolver implementations.
+    backend._verify_dns = AsyncMock()
+    return backend
 
 
 class WireGuardHealthTests(unittest.IsolatedAsyncioTestCase):

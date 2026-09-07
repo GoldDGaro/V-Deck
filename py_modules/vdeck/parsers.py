@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ipaddress
 import json
 import re
 import shlex
@@ -104,6 +105,82 @@ OPENVPN_EXTERNAL = {
     "extra-certs",
 }
 OPENVPN_INLINE_MATERIAL = OPENVPN_EXTERNAL | {"pkcs12"}
+# A blacklist misses nested config loading, alternate executables and new
+# plugin/file options. Only reviewed client directives may reach the root daemon.
+OPENVPN_CLIENT_OPTIONS = OPENVPN_EXTERNAL | {
+    "client",
+    "tls-client",
+    "dev",
+    "dev-type",
+    "proto",
+    "remote",
+    "port",
+    "rport",
+    "lport",
+    "remote-random",
+    "resolv-retry",
+    "nobind",
+    "bind",
+    "local",
+    "persist-key",
+    "persist-tun",
+    "auth-user-pass",
+    "auth-nocache",
+    "auth-retry",
+    "auth",
+    "cipher",
+    "data-ciphers",
+    "data-ciphers-fallback",
+    "tls-cipher",
+    "tls-ciphersuites",
+    "tls-version-min",
+    "tls-version-max",
+    "remote-cert-tls",
+    "remote-cert-ku",
+    "remote-cert-eku",
+    "verify-x509-name",
+    "peer-fingerprint",
+    "key-direction",
+    "pull",
+    "route",
+    "route-ipv6",
+    "redirect-gateway",
+    "dhcp-option",
+    "ifconfig",
+    "ifconfig-ipv6",
+    "topology",
+    "tun-mtu",
+    "mssfix",
+    "fragment",
+    "mtu-disc",
+    "ping",
+    "ping-restart",
+    "ping-exit",
+    "keepalive",
+    "connect-retry",
+    "connect-retry-max",
+    "connect-timeout",
+    "server-poll-timeout",
+    "explicit-exit-notify",
+    "reneg-sec",
+    "reneg-bytes",
+    "reneg-pkts",
+    "hand-window",
+    "tran-window",
+    "tls-timeout",
+    "sndbuf",
+    "rcvbuf",
+    "fast-io",
+    "verb",
+    "mute",
+    "mute-replay-warnings",
+    "allow-compression",
+    "compress",
+    "comp-lzo",
+    "float",
+    "disable-dco",
+    "auth-token-user",
+}
 
 
 @dataclass
@@ -133,6 +210,8 @@ def _parse_sectioned(text: str) -> list[tuple[str, str, str, str]]:
     section = ""
     parsed: list[tuple[str, str, str, str]] = []
     for line_number, raw in enumerate(text.replace("\r\n", "\n").replace("\r", "\n").split("\n"), 1):
+        # wg/awg and wg-quick ignore # comments, including inline comments.
+        raw = raw.split("#", 1)[0]
         stripped = raw.strip()
         if not stripped or stripped.startswith(("#", ";")):
             parsed.append((section, "", "", raw))
@@ -154,6 +233,52 @@ def _looks_like_key(value: str) -> bool:
         return len(base64.b64decode(value.strip(), validate=True)) == 32
     except (ValueError, binascii.Error):
         return False
+
+
+def validate_wireguard_network(parsed: ParsedConfig) -> ParsedConfig:
+    """Normalize untrusted network fields without echoing their values in errors."""
+    for attribute, parser, code in (
+        ("interface_addresses", ipaddress.ip_interface, "CONFIG_INVALID_ADDRESS"),
+        ("dns_servers", ipaddress.ip_address, "CONFIG_INVALID_DNS"),
+        ("allowed_ips", lambda value: ipaddress.ip_network(value, strict=False), "CONFIG_INVALID_ROUTE"),
+    ):
+        normalized: list[str] = []
+        for index, value in enumerate(getattr(parsed, attribute)):
+            if not isinstance(value, str) or "$" in value:
+                raise VDeckError(
+                    "CONFIG_UNRESOLVED_TEMPLATE", "Re-import the original VPN file to resolve network fields"
+                )
+            try:
+                address = parser(value)
+                if "%" in value:
+                    raise ValueError("Scoped addresses are unsupported")
+            except ValueError as exc:
+                raise VDeckError(code, f"Invalid {attribute} entry at position {index + 1}") from exc
+            rendered = str(address)
+            if rendered not in normalized:
+                normalized.append(rendered)
+        setattr(parsed, attribute, normalized)
+    v4 = ipaddress.collapse_addresses(ipaddress.IPv4Network(value) for value in parsed.allowed_ips if ":" not in value)
+    v6 = ipaddress.collapse_addresses(ipaddress.IPv6Network(value) for value in parsed.allowed_ips if ":" in value)
+    parsed.allowed_ips = [str(network) for network in [*v4, *v6]]
+    if not parsed.interface_addresses or not parsed.allowed_ips or not parsed.endpoints:
+        raise VDeckError("CONFIG_MISSING_NETWORK", "Configuration requires Address, AllowedIPs, and Endpoint")
+    if parsed.mtu is not None and (type(parsed.mtu) is not int or not 576 <= parsed.mtu <= 65535):
+        raise VDeckError("CONFIG_INVALID_MTU", "MTU must be between 576 and 65535")
+    if any(":" in address for address in parsed.interface_addresses) and parsed.mtu is not None and parsed.mtu < 1280:
+        raise VDeckError("CONFIG_INVALID_MTU", "IPv6 requires an MTU of at least 1280")
+    for endpoint in parsed.endpoints:
+        if not isinstance(endpoint, str) or "$" in endpoint:
+            raise VDeckError("CONFIG_UNRESOLVED_TEMPLATE", "Re-import the original VPN file to resolve the endpoint")
+        match = re.fullmatch(r"(?:\[([0-9A-Fa-f:]+)\]|([A-Za-z0-9_.-]+)):(\d{1,5})", endpoint)
+        if not match or not 1 <= int(match[3]) <= 65535:
+            raise VDeckError("ENDPOINT_INVALID", "Endpoint must contain a hostname or IP and a valid port")
+        if match[1]:
+            try:
+                ipaddress.IPv6Address(match[1])
+            except ValueError as exc:
+                raise VDeckError("ENDPOINT_INVALID", "Invalid IPv6 endpoint") from exc
+    return parsed
 
 
 def parse_wireguard_text(text: str, selected_protocol: Protocol, source_format: str = ".conf") -> ParsedConfig:
@@ -200,6 +325,8 @@ def parse_wireguard_text(text: str, selected_protocol: Protocol, source_format: 
                     mtu = int(value)
                 except ValueError as exc:
                     raise VDeckError("CONFIG_INVALID_MTU", "MTU must be an integer") from exc
+            elif lowered == "table" and value.lower() != "auto":
+                raise VDeckError("CONFIG_UNSUPPORTED_TABLE", "V-Deck owns routing; custom Table/off is unsupported")
             continue
         if section == "peer" and lowered == "allowedips":
             allowed.extend(item.strip() for item in value.split(",") if item.strip())
@@ -209,15 +336,17 @@ def parse_wireguard_text(text: str, selected_protocol: Protocol, source_format: 
 
     if not addresses or not allowed or not endpoints:
         raise VDeckError("CONFIG_MISSING_NETWORK", "Configuration requires Address, AllowedIPs, and Endpoint")
-    return ParsedConfig(
-        protocol=selected_protocol.value,
-        runtime_config="\n".join(output).strip() + "\n",
-        source_format=source_format,
-        interface_addresses=addresses,
-        dns_servers=dns,
-        mtu=mtu,
-        allowed_ips=allowed,
-        endpoints=endpoints,
+    return validate_wireguard_network(
+        ParsedConfig(
+            protocol=selected_protocol.value,
+            runtime_config="\n".join(output).strip() + "\n",
+            source_format=source_format,
+            interface_addresses=addresses,
+            dns_servers=dns,
+            mtu=mtu,
+            allowed_ips=allowed,
+            endpoints=endpoints,
+        )
     )
 
 
@@ -287,7 +416,28 @@ def parse_amnezia_vpn(text: str) -> ParsedConfig:
             raise VDeckError("AMNEZIA_UNSUPPORTED", "Invalid AmneziaWG client data") from exc
     if not isinstance(last, dict) or not isinstance(last.get("config"), str):
         raise VDeckError("AMNEZIA_UNSUPPORTED", "The AmneziaWG container has no client configuration")
-    return parse_wireguard_text(last["config"], Protocol.AMNEZIAWG, source_format=".vpn")
+    config = last["config"]
+    # Native sharing stores the DNS template; Amnezia applies the exported
+    # server's dns1/dns2 before passing last_config.config to the VPN backend.
+    replacements = {"$PRIMARY_DNS": document.get("dns1"), "$SECONDARY_DNS": document.get("dns2")}
+    lines: list[str] = []
+    for section, key, value, raw in _parse_sectioned(config):
+        if section == "interface" and key.lower() == "dns":
+            servers: list[str] = []
+            for item in value.split(","):
+                item = item.strip()
+                if item in replacements:
+                    replacement = replacements[item]
+                    if item == "$SECONDARY_DNS" and replacement in (None, ""):
+                        continue  # secondary DNS is optional; never invent a fallback
+                    if not isinstance(replacement, str) or not replacement.strip():
+                        raise VDeckError("AMNEZIA_DNS_MISSING", "The native VPN file is missing its DNS setting")
+                    item = replacement.strip()
+                if item:
+                    servers.append(item)
+            raw = "DNS = " + ", ".join(servers)
+        lines.append(raw)
+    return parse_wireguard_text("\n".join(lines), Protocol.AMNEZIAWG, source_format=".vpn")
 
 
 def _openvpn_lines(text: str) -> Iterable[tuple[int, str, list[str]]]:
@@ -334,9 +484,9 @@ def parse_openvpn(path: Path) -> ParsedConfig:
     directives = list(_openvpn_lines(text))
     names = {name for _, name, _ in directives}
     unsafe = names & OPENVPN_DANGEROUS
-    if unsafe:
+    if unsafe or names - OPENVPN_CLIENT_OPTIONS:
         raise VDeckError(
-            "CONFIG_UNSAFE_DIRECTIVE", f"Executable OpenVPN directives are not supported: {', '.join(sorted(unsafe))}"
+            "CONFIG_UNSAFE_DIRECTIVE", "Executable or unsupported OpenVPN directive; use a client-only profile"
         )
     if "remote" not in names:
         raise VDeckError("CONFIG_MISSING_REMOTE", "OpenVPN configuration requires at least one remote directive")
@@ -345,18 +495,39 @@ def parse_openvpn(path: Path) -> ParsedConfig:
     replacements: dict[int, str] = {}
     files: dict[str, bytes] = {}
     requires_auth = False
-    requires_passphrase = bool(re.search(r"-----BEGIN ENCRYPTED PRIVATE KEY-----", text))
+    requires_passphrase = "ENCRYPTED PRIVATE KEY" in text or "Proc-Type: 4,ENCRYPTED" in text
     remote_values: list[str] = []
     dns_servers: list[str] = []
     allowed_ips: list[str] = []
     used_names: set[str] = set()
     for number, name, tokens in directives:
         if name == "remote" and len(tokens) >= 2:
+            if not re.fullmatch(r"[A-Za-z0-9_.:-]+", tokens[1]):
+                raise VDeckError("ENDPOINT_INVALID", "Invalid OpenVPN endpoint")
             remote_values.append(tokens[1])
         if name == "dhcp-option" and len(tokens) >= 3 and tokens[1].upper() == "DNS":
-            dns_servers.append(tokens[2])
+            try:
+                dns_servers.append(str(ipaddress.ip_address(tokens[2])))
+            except ValueError as exc:
+                raise VDeckError("CONFIG_INVALID_DNS", "Invalid OpenVPN DNS address") from exc
+        if name in {"route", "route-ipv6"}:
+            try:
+                network: ipaddress.IPv4Network | ipaddress.IPv6Network
+                if name == "route":
+                    mask = tokens[2] if len(tokens) >= 3 else "255.255.255.255"
+                    network = ipaddress.IPv4Network(f"{tokens[1]}/{mask}", strict=False)
+                    if len(tokens) > 3 and tokens[3] != "vpn_gateway":
+                        raise ValueError("Physical gateway routes are unsupported")
+                else:
+                    network = ipaddress.ip_network(tokens[1], strict=False)
+                    if network.version != 6 or len(tokens) > 2:
+                        raise ValueError("Only tunnel IPv6 routes are supported")
+                allowed_ips.append(str(network))
+            except (ValueError, IndexError) as exc:
+                raise VDeckError("CONFIG_INVALID_ROUTE", "Unsupported OpenVPN route; use a tunnel destination") from exc
         if name == "redirect-gateway":
-            allowed_ips.append("0.0.0.0/0")
+            if "!ipv4" not in tokens[1:]:
+                allowed_ips.append("0.0.0.0/0")
             if any(token.lower() == "ipv6" for token in tokens[1:]):
                 allowed_ips.append("::/0")
         if name == "auth-user-pass":
@@ -365,7 +536,7 @@ def parse_openvpn(path: Path) -> ParsedConfig:
             continue
         if name not in OPENVPN_EXTERNAL or len(tokens) < 2 or tokens[1].startswith("[[INLINE]]"):
             continue
-        dependency = resolve_import_dependency(source_dir, tokens[1])
+        dependency = ensure_regular_file(resolve_import_dependency(source_dir, tokens[1]))
         base = re.sub(r"[^A-Za-z0-9._-]+", "_", dependency.name).lstrip(".") or "file"
         candidate = base
         suffix = 1
@@ -375,8 +546,8 @@ def parse_openvpn(path: Path) -> ParsedConfig:
         used_names.add(candidate.lower())
         data = dependency.read_bytes()
         files[candidate] = data
-        replacements[number] = f"{name} files/{candidate}"
-        if name == "key" and b"ENCRYPTED PRIVATE KEY" in data:
+        replacements[number] = shlex.join([name, f"files/{candidate}", *tokens[2:]])
+        if name == "key" and (b"ENCRYPTED PRIVATE KEY" in data or b"Proc-Type: 4,ENCRYPTED" in data):
             requires_passphrase = True
 
     rendered: list[str] = []
@@ -386,9 +557,9 @@ def parse_openvpn(path: Path) -> ParsedConfig:
         protocol=Protocol.OPENVPN.value,
         runtime_config="\n".join(rendered).strip() + "\n",
         source_format=".ovpn",
-        endpoints=remote_values,
-        dns_servers=dns_servers,
-        allowed_ips=allowed_ips,
+        endpoints=list(dict.fromkeys(remote_values)),
+        dns_servers=list(dict.fromkeys(dns_servers)),
+        allowed_ips=list(dict.fromkeys(allowed_ips)),
         files=files,
         requires_username_password=requires_auth,
         requires_key_passphrase=requires_passphrase,

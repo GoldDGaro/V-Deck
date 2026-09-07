@@ -1,6 +1,7 @@
 import { callable } from "@decky/api";
 import type {
   DiagnosticsResponse,
+  ExternalIpResponse,
   ImportValidation,
   Protocol,
   RpcResponse,
@@ -8,6 +9,10 @@ import type {
 } from "./types";
 
 export const getSnapshot = callable<[], SnapshotResponse>("get_snapshot");
+export const logImportEvent = callable<
+  [event: string, details: Record<string, string | number | boolean>],
+  RpcResponse
+>("log_import_event");
 export const validateImport = callable<
   [protocol: Protocol, path: string, realpath: string],
   ImportValidation
@@ -54,6 +59,9 @@ export const getDiagnostics = callable<
   [connectionId: string],
   DiagnosticsResponse
 >("get_diagnostics");
+export const checkExternalIp = callable<[], ExternalIpResponse>(
+  "check_external_ip",
+);
 export const exportDiagnostics = callable<
   [connectionId: string, deckyVersion: string],
   RpcResponse

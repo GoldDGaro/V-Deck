@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import tempfile
 import unittest
 import zlib
@@ -18,7 +19,7 @@ def qt_compress(data: bytes) -> bytes:
     return len(data).to_bytes(4, "big") + zlib.compress(data, 8)
 
 
-def native_vpn(config: str) -> str:
+def native_vpn(config: str, **settings) -> str:
     document = {
         "description": "Synthetic official-shape fixture",
         "defaultContainer": "amnezia-awg2",
@@ -28,6 +29,7 @@ def native_vpn(config: str) -> str:
                 "awg": {"last_config": json.dumps({"config": config, "clientId": "synthetic"})},
             }
         ],
+        **settings,
     }
     payload = base64.urlsafe_b64encode(qt_compress(json.dumps(document).encode())).decode().rstrip("=")
     return "vpn://" + payload
@@ -71,6 +73,55 @@ class WireGuardParserTests(unittest.TestCase):
 
 
 class AmneziaNativeParserTests(unittest.TestCase):
+    def test_native_dns_template_matches_resolved_conf_in_all_runtime_fields(self):
+        from dataclasses import asdict
+
+        config = (FIXTURES / "awg31.conf").read_text()
+        template = re.sub(r"(?m)^DNS\s*=.*$", "DNS = $PRIMARY_DNS, $SECONDARY_DNS", config)
+        config = re.sub(r"(?m)^DNS\s*=.*$", "DNS = 1.1.1.1, 1.0.0.1", config)
+        self.assertIn("$PRIMARY_DNS", template)
+        vpn = asdict(parse_amnezia_vpn(native_vpn(template, dns1="1.1.1.1", dns2="1.0.0.1")))
+        conf = asdict(parse_wireguard_text(config, Protocol.AMNEZIAWG))
+        self.assertEqual(vpn.pop("source_format"), ".vpn")
+        conf.pop("source_format")
+        self.assertEqual(vpn, conf)
+
+    def test_native_missing_primary_dns_is_actionable_not_value_error(self):
+        config = re.sub(r"(?m)^DNS\s*=.*$", "DNS = $PRIMARY_DNS", (FIXTURES / "awg31.conf").read_text())
+        with self.assertRaises(VDeckError) as raised:
+            parse_amnezia_vpn(native_vpn(config))
+        self.assertEqual(raised.exception.code, "AMNEZIA_DNS_MISSING")
+
+    def test_native_optional_secondary_dns_is_not_invented(self):
+        config = (FIXTURES / "awg31.conf").read_text()
+        config = re.sub(r"(?m)^DNS\s*=.*$", "DNS = $PRIMARY_DNS, $SECONDARY_DNS", config)
+        parsed = parse_amnezia_vpn(native_vpn(config, dns1="10.8.0.1"))
+        self.assertEqual(parsed.dns_servers, ["10.8.0.1"])
+
+    def test_invalid_network_fields_are_rejected_with_no_values_in_message(self):
+        original = (FIXTURES / "awg31.conf").read_text()
+        for field, code in (
+            ("DNS", "CONFIG_INVALID_DNS"),
+            ("Address", "CONFIG_INVALID_ADDRESS"),
+            ("AllowedIPs", "CONFIG_INVALID_ROUTE"),
+            ("Endpoint", "ENDPOINT_INVALID"),
+        ):
+            with self.subTest(field=field):
+                config = re.sub(rf"(?m)^{field}\s*=.*$", f"{field} = raw-unlabelled-secret", original)
+                with self.assertRaises(VDeckError) as raised:
+                    parse_amnezia_vpn(native_vpn(config))
+                self.assertEqual(raised.exception.code, code)
+                self.assertNotIn("raw-unlabelled-secret", str(raised.exception))
+
+    def test_inline_comments_do_not_reach_network_values_or_setconf(self):
+        config = (FIXTURES / "awg31.conf").read_text()
+        annotated = "\n".join(line + " # exported note" if "=" in line else line for line in config.splitlines())
+        parsed = parse_amnezia_vpn(native_vpn(annotated))
+        expected = parse_wireguard_text(config, Protocol.AMNEZIAWG)
+        self.assertEqual(parsed.dns_servers, expected.dns_servers)
+        self.assertEqual(parsed.allowed_ips, expected.allowed_ips)
+        self.assertNotIn("exported note", parsed.runtime_config)
+
     def test_official_qcompress_container_shape(self):
         config = (FIXTURES / "awg31.conf").read_text()
         parsed = parse_amnezia_vpn(native_vpn(config))
