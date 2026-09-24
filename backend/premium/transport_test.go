@@ -215,5 +215,3 @@ func TestProductionDialBlocksPrivateDestinations(t *testing.T) {
 		t.Fatalf("unsafe dial: %+v", trace)
 	}
 }
-
-// Opt-in real, anonymous probe. Never uses a subscription or issues a config.

@@ -4,7 +4,7 @@
 
 `backend/premium` builds the original `premium-api` helper using pinned Go 1.25.14,
 CGO disabled and linux/amd64 target. It only performs HTTPS API requests and exits;
-it is not a VPN daemon. See `premium/main.go` for protocol provenance and tests.
+it is not a VPN daemon. See `premium/BUILD.md` for build instructions and provenance.
 
 ## Xray 26.3.27 (local preview)
 

@@ -15,6 +15,7 @@ from elf_audit import ElfError, audit
 
 REQUIRED = {
     "V-Deck/backend/NATIVE_BUILD.md",
+    "V-Deck/backend/premium/BUILD.md",
     "V-Deck/main.py",
     "V-Deck/plugin.json",
     "V-Deck/package.json",

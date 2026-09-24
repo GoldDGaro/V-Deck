@@ -364,7 +364,9 @@ describe("rendered Decky import flow", () => {
     render(<DeckyHost plugin={createPlugin()} visible />);
     fireEvent.click(await screen.findByRole("checkbox"));
     await screen.findByText(/DNS_APPLY_FAILED/);
-    expect(screen.getByText("Example VPN", { selector: "strong" })).toBeTruthy();
+    expect(
+      screen.getByText("Example VPN", { selector: "strong" }),
+    ).toBeTruthy();
     expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(
       false,
     );

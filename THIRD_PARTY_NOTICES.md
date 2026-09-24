@@ -17,7 +17,7 @@ This audit applies to V-Deck 0.2.0. V-Deck's PolyForm license covers only origin
 `premium-api` is original V-Deck code, independently implementing the documented-by-source
 gateway wire format. It is not linked to or copied from Amnezia's GPL client.
 Go 1.25.14 runtime/standard library notice: `licenses/Go-BSD-3-Clause.txt`.
-Build source and protocol provenance: `backend/premium/main.go` in the source archive.
+Build instructions and provenance: `backend/premium/BUILD.md` in the source archive.
 
 ## Shipped native executables
 

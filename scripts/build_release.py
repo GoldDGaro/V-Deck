@@ -29,6 +29,7 @@ INSTALL_FILES = {
     "CHANGELOG.md",
     "backend/versions.json",
     "backend/NATIVE_BUILD.md",
+    "backend/premium/BUILD.md",
 }
 SOURCE_REPOSITORIES = (
     "xray-core",

@@ -22,6 +22,7 @@ PROJECT_REQUIRED = {
     "V-Deck-source/V-Deck/backend/premium/transport.go",
     "V-Deck-source/V-Deck/backend/premium/transport_test.go",
     "V-Deck-source/V-Deck/backend/premium/go.mod",
+    "V-Deck-source/V-Deck/backend/premium/BUILD.md",
     "V-Deck-source/V-Deck/backend/Dockerfile",
     "V-Deck-source/V-Deck/backend/NATIVE_BUILD.md",
     "V-Deck-source/V-Deck/backend/versions.json",
