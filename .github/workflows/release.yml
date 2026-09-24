@@ -27,13 +27,13 @@ jobs:
       - run: python3 scripts/elf_audit.py bin/*
       - run: python3 scripts/fetch_sources.py
       - run: python3 scripts/build_release.py
-      - run: python3 scripts/verify_release.py ../outputs/V-Deck-v0.1.0.zip
-      - run: python3 scripts/verify_source.py ../outputs/V-Deck-v0.1.0-source.zip
+      - run: python3 scripts/verify_release.py ../outputs/V-Deck-v0.2.0.zip
+      - run: python3 scripts/verify_source.py ../outputs/V-Deck-v0.2.0-source.zip
       - name: Stage release assets inside the workspace
         run: |
           mkdir -p release
-          cp ../outputs/V-Deck-v0.1.0.zip release/
-          cp ../outputs/V-Deck-v0.1.0-source.zip release/
+          cp ../outputs/V-Deck-v0.2.0.zip release/
+          cp ../outputs/V-Deck-v0.2.0-source.zip release/
           cp ../outputs/SHA256SUMS.txt release/
           cp ../outputs/release-manifest.json release/
       - uses: softprops/action-gh-release@v2
@@ -41,8 +41,8 @@ jobs:
           name: V-Deck ${{ github.ref_name }} — Public preview / Публичная тестовая версия
           prerelease: true
           files: |
-            release/V-Deck-v0.1.0.zip
-            release/V-Deck-v0.1.0-source.zip
+            release/V-Deck-v0.2.0.zip
+            release/V-Deck-v0.2.0-source.zip
             release/SHA256SUMS.txt
             release/release-manifest.json
           body_path: .github/RELEASE_NOTES.md

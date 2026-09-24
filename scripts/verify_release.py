@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from elf_audit import ElfError, audit
 
 REQUIRED = {
+    "V-Deck/backend/NATIVE_BUILD.md",
     "V-Deck/main.py",
     "V-Deck/plugin.json",
     "V-Deck/package.json",
@@ -74,7 +75,7 @@ def verify(path: Path) -> None:
 
         plugin = json.loads(archive.read("V-Deck/plugin.json"))
         package = json.loads(archive.read("V-Deck/package.json"))
-        if plugin.get("name") != "V-Deck" or package.get("version") != "0.1.0":
+        if plugin.get("name") != "V-Deck" or package.get("version") != "0.2.0":
             errors.append("plugin/package identity mismatch")
         if "root" not in plugin.get("flags", []) or "_root" in plugin.get("flags", []):
             errors.append("Decky root runtime flag is missing or disabled")

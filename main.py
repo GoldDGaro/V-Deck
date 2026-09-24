@@ -43,7 +43,7 @@ class Plugin:
         package_logger.setLevel(logging.INFO)
         package_logger.propagate = False
         await self.service.initialize()
-        decky.logger.info("V-Deck 0.1.0 initialized")
+        decky.logger.info("V-Deck 0.2.0 initialized")
 
     async def _unload(self) -> None:
         await self.service.shutdown(uninstall=False)

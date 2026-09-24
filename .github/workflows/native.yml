@@ -49,6 +49,8 @@ jobs:
             "$root/wireguard-go" --version
             "$root/wg" --version
             "$root/openvpn" --version
+            "$root/xray" version
+            printf '%s\n' '{"operation":"invalid","payload":{}}' | "$root/premium-api" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == "PREMIUM_REQUEST_INVALID"'
           done
       - name: Verify bundled version manifest and SHA-256 digests
         env:

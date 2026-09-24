@@ -275,7 +275,7 @@ class DiagnosticsManager:
                 stream.seek(max(0, log_path.stat().st_size - 100_000))
                 logs = stream.read(100_000).decode("utf-8", errors="replace")
         report = {
-            "vdeck_version": "0.1.0",
+            "vdeck_version": "0.2.0",
             "steamos": sanitize(os_release),
             "decky_version": decky_version,
             "architecture": platform.machine(),

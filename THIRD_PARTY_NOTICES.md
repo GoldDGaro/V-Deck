@@ -10,7 +10,7 @@ Exact source commit `d2758a023cd7f4174a5a5fa4ff66e487d4342ba0` is included in th
 under `third_party_src/xray-core`, with dependency versions in go.mod/go.sum.
 Upstream: https://github.com/XTLS/Xray-core/tree/v26.3.27.
 
-This audit applies to V-Deck 0.1.0. V-Deck's PolyForm license covers only original V-Deck code. Every component below keeps its own license. Source URLs identify the exact upstream; the release's adjacent corresponding-source archive contains the source used for bundled GPL executables, build recipes, and local build patches.
+This audit applies to V-Deck 0.2.0. V-Deck's PolyForm license covers only original V-Deck code. Every component below keeps its own license. Source URLs identify the exact upstream; the release's adjacent corresponding-source archive contains the source used for bundled GPL executables, build recipes, and local build patches.
 
 ## Premium API helper
 
@@ -30,7 +30,7 @@ Build source and protocol provenance: `backend/premium/main.go` in the source ar
 | [OpenVPN](https://github.com/OpenVPN/openvpn) | `v2.7.6` | GPL-2.0-only with upstream exceptions | Separate bundled `openvpn` executable; statically linked to wolfSSL; LZO/LZ4/PKCS#11/DCO disabled | Whole executable is distributed under GPL-2.0; corresponding OpenVPN and linked wolfSSL source/build material accompanies it | `licenses/OpenVPN-GPL-2.0.txt` |
 | [wolfSSL](https://github.com/wolfSSL/wolfssl) | `v5.9.2-stable` | GPL-3.0, with explicit election of GPL-2.0 when combined with OpenVPN | Statically linked only into bundled OpenVPN | V-Deck elects GPL-2.0 for this OpenVPN combination under wolfSSL's written exception; ship COPYING, exception, and corresponding source | `licenses/wolfSSL-GPL-3.0.txt`, `licenses/wolfSSL-LICENSING.txt` |
 
-The GPL programs communicate with V-Deck through normal process execution, standard input/output, local management sockets, and Linux networking interfaces. They are not imported or linked into the original Python/TypeScript V-Deck program. This separation does not remove the GPL obligations for the executable files themselves; the binary release and matching `V-Deck-v0.1.0-source.zip` must remain available together.
+The GPL programs communicate with V-Deck through normal process execution, standard input/output, local management sockets, and Linux networking interfaces. They are not imported or linked into the original Python/TypeScript V-Deck program. This separation does not remove the GPL obligations for the executable files themselves; the binary release and matching `V-Deck-v0.2.0-source.zip` must remain available together.
 
 OpenSSL is not bundled or linked. OpenVPN is deliberately built with wolfSSL. OpenVPN's OpenSSL exception remains in its upstream COPYING file but is not the basis of this build.
 
@@ -58,4 +58,4 @@ Native build inputs are Go 1.25.14 (BSD-3-Clause), Zig 0.15.2 (MIT), CMake 4.1.0
 
 ## Source-distribution checklist
 
-Anyone redistributing `V-Deck-v0.1.0.zip` should also provide the unmodified license files and the adjacent `V-Deck-v0.1.0-source.zip` from the same release. The source archive must include exact tagged sources, the wolfSSL CMake OpenVPN recipe backport, OpenVPN static-build patch, Docker/build scripts, and the V-Deck source corresponding to the binaries. Do not apply the PolyForm terms to third-party source.
+Anyone redistributing `V-Deck-v0.2.0.zip` should also provide the unmodified license files and the adjacent `V-Deck-v0.2.0-source.zip` from the same release. The source archive must include exact tagged sources, the wolfSSL CMake OpenVPN recipe backport, OpenVPN static-build patch, Docker/build scripts, and the V-Deck source corresponding to the binaries. Do not apply the PolyForm terms to third-party source.

@@ -69,7 +69,7 @@ def _lookup(logger: logging.Logger, cancelled: threading.Event) -> dict[str, str
             break
         try:
             request = urllib.request.Request(  # noqa: S310 -- fixed HTTPS-only allowlist above
-                provider, headers={"User-Agent": "V-Deck/0.1.0", "Accept": "text/plain"}
+                provider, headers={"User-Agent": "V-Deck/0.2.0", "Accept": "text/plain"}
             )
             with opener.open(request, timeout=4) as response:
                 raw = response.read(65)

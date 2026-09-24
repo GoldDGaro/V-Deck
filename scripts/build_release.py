@@ -28,6 +28,7 @@ INSTALL_FILES = {
     "THIRD_PARTY_NOTICES.md",
     "CHANGELOG.md",
     "backend/versions.json",
+    "backend/NATIVE_BUILD.md",
 }
 SOURCE_REPOSITORIES = (
     "xray-core",
@@ -81,7 +82,7 @@ def _install_entries() -> Iterable[tuple[Path, str, int]]:
         if not path.is_file():
             raise FileNotFoundError(path)
         yield path, f"V-Deck/{name}", 0o644
-    for directory in ("dist", "py_modules", "bin", "licenses"):
+    for directory in ("dist", "py_modules", "bin", "licenses", "docs"):
         root = PROJECT / directory
         if not root.is_dir():
             raise FileNotFoundError(root)
@@ -132,8 +133,8 @@ def main() -> int:
     parser.add_argument("--research-dir", type=Path, default=WORK / "research")
     arguments = parser.parse_args()
     arguments.output_dir.mkdir(parents=True, exist_ok=True)
-    install = arguments.output_dir / "V-Deck-v0.1.0.zip"
-    source = arguments.output_dir / "V-Deck-v0.1.0-source.zip"
+    install = arguments.output_dir / "V-Deck-v0.2.0.zip"
+    source = arguments.output_dir / "V-Deck-v0.2.0-source.zip"
     build_install(install)
     build_source(source, arguments.research_dir)
     sums = arguments.output_dir / "SHA256SUMS.txt"
@@ -143,7 +144,7 @@ def main() -> int:
         newline="\n",
     )
     manifest = {
-        "version": "0.1.0",
+        "version": "0.2.0",
         "install": install.name,
         "source": source.name,
         "install_sha256": _sha256(install),

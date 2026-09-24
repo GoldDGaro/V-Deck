@@ -1,7 +1,7 @@
 {
   "name": "v-deck",
-  "version": "0.1.0",
-  "description": "VPN manager for Steam Deck / Менеджер VPN: AmneziaWG, WireGuard, OpenVPN. Public preview / Тестовая версия.",
+  "version": "0.2.0",
+  "description": "Decky VPN manager / Менеджер VPN: AmneziaWG, WireGuard, OpenVPN, Xray Reality, Amnezia Premium. Public preview.",
   "type": "module",
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",
