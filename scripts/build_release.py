@@ -51,7 +51,7 @@ COMMON_EXCLUDED_PARTS = frozenset(
         "outputs",
     }
 )
-PROJECT_SOURCE_EXCLUDED_PARTS = COMMON_EXCLUDED_PARTS | {"dist", "bin", "release", "third_party_src"}
+PROJECT_SOURCE_EXCLUDED_PARTS = COMMON_EXCLUDED_PARTS | {"dist", "bin", "release", "third_party_src", "handoff"}
 
 
 def _iter_files(root: Path, *, excluded_parts: Set[str] = COMMON_EXCLUDED_PARTS) -> Iterable[Path]:
@@ -82,7 +82,7 @@ def _install_entries() -> Iterable[tuple[Path, str, int]]:
         if not path.is_file():
             raise FileNotFoundError(path)
         yield path, f"V-Deck/{name}", 0o644
-    for directory in ("dist", "py_modules", "bin", "licenses", "docs"):
+    for directory in ("dist", "py_modules", "bin", "licenses"):
         root = PROJECT / directory
         if not root.is_dir():
             raise FileNotFoundError(root)
