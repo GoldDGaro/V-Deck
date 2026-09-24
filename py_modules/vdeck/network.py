@@ -9,7 +9,8 @@ import os
 import re
 import socket
 import struct
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Coroutine, Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,21 @@ from .errors import VDeckError
 from .runner import CommandRunner
 
 LOGGER = logging.getLogger(__name__)
+
+
+async def first_success(probes: Iterable[Coroutine[Any, Any, bool]]) -> bool:
+    """Return on a successful bounded probe; close all losers before returning."""
+    tasks = [asyncio.create_task(probe) for probe in probes]
+    try:
+        for result in asyncio.as_completed(tasks):
+            if await result:
+                return True
+        return False
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def interface_name(connection_id: str) -> str:
@@ -72,49 +88,109 @@ class NetworkInspector:
         )
 
     async def tcp_probe(self, interface: str, address: str) -> bool:
-        def probe() -> bool:
-            family = socket.AF_INET6 if ":" in address else socket.AF_INET
+        # Numeric-only destination: no system DNS request or proxy bypass. Use
+        # a cancellable socket rather than a worker that can outlive Disconnect.
+        target = str(ipaddress.ip_address(address))
+        logger = getattr(self.runner, "logger", None) or LOGGER
+        started = time.monotonic()
+        code, stage, exception, errno = "PROBE_CANCELLED", "BIND", None, None
+        try:
+            family = socket.AF_INET6 if ":" in target else socket.AF_INET
             bind_option = getattr(socket, "SO_BINDTODEVICE", None)
             if bind_option is None:
+                code = "PROBE_BIND_UNSUPPORTED"
                 return False
-            try:
-                with socket.socket(family, socket.SOCK_STREAM) as client:
-                    client.settimeout(4)
-                    client.setsockopt(socket.SOL_SOCKET, bind_option, interface.encode() + b"\x00")
-                    client.connect((address, 443))
-                    return True
-            except (OSError, AttributeError):
-                return False
-
-        return await asyncio.to_thread(probe)
+            with socket.socket(family, socket.SOCK_STREAM) as client:
+                client.setblocking(False)
+                client.setsockopt(socket.SOL_SOCKET, bind_option, interface.encode() + b"\x00")
+                stage = "CONNECT"
+                await asyncio.wait_for(asyncio.get_running_loop().sock_connect(client, (target, 443)), 4)
+                code = "OK"
+                return True
+        except (asyncio.TimeoutError, OSError, AttributeError) as exc:
+            exception, errno = type(exc).__name__, getattr(exc, "errno", None)
+            code = "PROBE_TCP_TIMEOUT" if isinstance(exc, asyncio.TimeoutError | TimeoutError) else "PROBE_TCP_FAILED"
+            return False
+        finally:
+            logger.info(
+                "traffic probe stage=%s method=TCP target=%s port=443 interface=%s "
+                "code=%s exception=%s errno=%s elapsed_ms=%d",
+                stage,
+                target,
+                interface,
+                code,
+                exception,
+                errno,
+                int((time.monotonic() - started) * 1000),
+            )
 
     async def dns_probe(self, interface: str, servers: list[str]) -> bool:
-        def probe() -> bool:
+        # Only the already route-verified numeric resolvers; no host DNS fallback.
+        targets = list(dict.fromkeys(str(ipaddress.ip_address(server)) for server in servers[:3]))
+        for attempt in (1, 2):
+            if await first_success(self._dns_attempt(interface, server, attempt) for server in targets):
+                return True
+            if attempt == 1 and targets:
+                await asyncio.sleep(0.25)
+        return False
+
+    async def _dns_attempt(self, interface: str, server: str, attempt: int) -> bool:
+        logger = getattr(self.runner, "logger", None) or LOGGER
+        started = time.monotonic()
+        code, stage, exception, errno = "DNS_PROBE_CANCELLED", "BIND", None, None
+        rcode, answers = None, None
+        try:
             bind_option = getattr(socket, "SO_BINDTODEVICE", None)
             if bind_option is None:
+                code = "DNS_BIND_UNSUPPORTED"
                 return False
-            for server in servers[:3]:
-                family = socket.AF_INET6 if ":" in server else socket.AF_INET
-                identifier = os.urandom(2)
-                query = (
-                    identifier + struct.pack("!HHHHH", 0x100, 1, 0, 0, 0) + b"\x07example\x03com\x00\x00\x01\x00\x01"
-                )
-                try:
-                    with socket.socket(family, socket.SOCK_DGRAM) as client:
-                        client.settimeout(3)
-                        client.setsockopt(socket.SOL_SOCKET, bind_option, interface.encode() + b"\x00")
-                        client.connect((server, 53))
-                        client.send(query)
-                        reply = client.recv(4096)
-                        if len(reply) >= 12 and reply[:2] == identifier:
-                            flags, _, answers = struct.unpack("!HHH", reply[2:8])
-                            if flags & 0x8000 and not flags & 0x000F and answers:
-                                return True
-                except (OSError, AttributeError):
-                    continue
-            return False
+            family = socket.AF_INET6 if ":" in server else socket.AF_INET
+            identifier = os.urandom(2)
+            query = identifier + struct.pack("!HHHHH", 0x100, 1, 0, 0, 0) + b"\x07example\x03com\x00\x00\x01\x00\x01"
+            with socket.socket(family, socket.SOCK_DGRAM) as client:
+                client.setblocking(False)
+                client.setsockopt(socket.SOL_SOCKET, bind_option, interface.encode() + b"\x00")
+                stage = "CONNECT"
+                client.connect((server, 53))
 
-        return await asyncio.to_thread(probe)
+                async def exchange() -> bytes:
+                    nonlocal stage
+                    loop = asyncio.get_running_loop()
+                    stage = "SEND"
+                    await loop.sock_sendall(client, query)
+                    stage = "RECEIVE"
+                    return await loop.sock_recv(client, 4096)
+
+                reply = await asyncio.wait_for(exchange(), 3)
+                stage = "VALIDATE"
+                code = "DNS_RESPONSE_INVALID"
+                if len(reply) >= 12 and reply[:2] == identifier:
+                    flags, _, answers = struct.unpack("!HHH", reply[2:8])
+                    rcode = flags & 0x000F
+                    if flags & 0x8000 and not flags & 0x7A00 and not rcode and answers:
+                        code = "OK"
+                        return True
+                    code = "DNS_RESPONSE_ERROR" if rcode else "DNS_RESPONSE_INVALID"
+            return False
+        except (asyncio.TimeoutError, OSError, AttributeError) as exc:
+            exception, errno = type(exc).__name__, getattr(exc, "errno", None)
+            code = "DNS_PROBE_TIMEOUT" if isinstance(exc, asyncio.TimeoutError | TimeoutError) else "DNS_PROBE_FAILED"
+            return False
+        finally:
+            logger.info(
+                "DNS probe stage=%s method=UDP server=%s interface=%s attempt=%d "
+                "code=%s exception=%s errno=%s rcode=%s answers=%s elapsed_ms=%d",
+                stage,
+                server,
+                interface,
+                attempt,
+                code,
+                exception,
+                errno,
+                rcode,
+                answers,
+                int((time.monotonic() - started) * 1000),
+            )
 
     async def resolve_endpoint(self, endpoint: str) -> list[str]:
         host = endpoint_host(endpoint)
@@ -159,6 +235,36 @@ class NetworkInspector:
         via = re.search(r"\bvia\s+(\S+)", result.stdout)
         dev = re.search(r"\bdev\s+(\S+)", result.stdout)
         return (via.group(1) if via else None, dev.group(1) if dev else None)
+
+    async def tunnel_mtu(self, endpoints: list[str], explicit: int | None, *, ipv6: bool) -> int:
+        """Use the endpoint route/link MTU minus WG encapsulation, as wg-quick does."""
+        if explicit is not None:
+            return explicit
+        limits: list[int] = []
+        for address in endpoints:
+            family = "-6" if ipaddress.ip_address(address).version == 6 else "-4"
+            route = await self.runner.run(["ip", family, "route", "get", address], check=False, timeout=3)
+            if route.returncode:
+                continue
+            mtu = re.search(r"\bmtu\s+(?:lock\s+)?(\d+)", route.stdout)
+            if mtu:
+                limits.append(int(mtu[1]))
+            device = re.search(r"\bdev\s+(\S+)", route.stdout)
+            if device:
+                link = await self.runner.run(["ip", "link", "show", "dev", device[1]], check=False, timeout=3)
+                link_mtu = re.search(r"\bmtu\s+(\d+)", link.stdout)
+                if link.returncode == 0 and link_mtu:
+                    limits.append(int(link_mtu[1]))
+        mtu_value = min(limits) - 80 if limits else 1420
+        if mtu_value < (1280 if ipv6 else 576):
+            raise VDeckError("TUNNEL_MTU_UNSUPPORTED", "Underlay MTU is too small for the configured tunnel family")
+        LOGGER.info(
+            "tunnel MTU selected mtu=%d source=%s ipv6=%s",
+            mtu_value,
+            "endpoint-route/link" if limits else "fallback",
+            ipv6,
+        )
+        return mtu_value
 
     async def public_ipv6_present(self) -> bool:
         result = await self.runner.run(["ip", "-6", "addr", "show", "scope", "global"], check=False, timeout=3)
@@ -410,17 +516,18 @@ class Ipv6Guard:
             raise VDeckError("FIREWALL_OWNERSHIP_CONFLICT", "IPv6 guard table is not owned by V-Deck")
         await self.runner.run(["nft", "delete", "table", "inet", "vdeck_ipv6"], timeout=5)
 
-    async def enable(self, interface: str, endpoints: list[str]) -> None:
+    async def enable(self, interface: str, endpoints: list[str], *, allow_tunnel: bool = True) -> None:
         await self.cleanup()
         rules = [
             f'add table inet vdeck_ipv6 {{ comment "{FirewallManager.OWNER_MARKER}"; }}',
             "add chain inet vdeck_ipv6 output { type filter hook output priority -90; policy accept; }",
             'add rule inet vdeck_ipv6 output oifname "lo" accept',
-            f'add rule inet vdeck_ipv6 output oifname "{interface}" accept',
             "add rule inet vdeck_ipv6 output meta l4proto ipv6-icmp icmpv6 type "
             "{ nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit } accept",
             "add rule inet vdeck_ipv6 output ip6 daddr ff02::1:2 udp sport 546 udp dport 547 accept",
         ]
+        if allow_tunnel:
+            rules.append(f'add rule inet vdeck_ipv6 output oifname "{interface}" accept')
         for address in endpoints:
             if ipaddress.ip_address(address).version == 6:
                 rules.append(f"add rule inet vdeck_ipv6 output ip6 daddr {address} accept")

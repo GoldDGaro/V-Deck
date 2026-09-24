@@ -97,5 +97,17 @@ RUN cd /src/openvpn \
     && file /out/* \
     && ! scanelf -n /out/* | grep -E 'lib(c|m|pthread|wolfssl|cap-ng)\.so'
 
+RUN wget -O /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip \
+    && echo '23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae  /tmp/xray.zip' | sha256sum -c - \
+    && unzip -p /tmp/xray.zip xray > /out/xray \
+    && chmod 0755 /out/xray \
+    && echo '8255dd939c34cf966cc91517b6324dd3c8d0bcf49ffac8beca049a38c46845ed  /out/xray' | sha256sum -c -
+
+COPY backend/premium /src/vdeck-premium
+RUN cd /src/vdeck-premium \
+    && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/premium-api . \
+    && file /out/premium-api \
+    && ! scanelf -n /out/premium-api | grep -E 'lib.*\.so'
+
 FROM scratch AS binaries
 COPY --from=builder /out/ /

@@ -32,7 +32,7 @@ EVENTS = frozenset(
     }
 )
 ENUM_FIELDS = {
-    "protocol": {"amneziawg", "wireguard", "openvpn"},
+    "protocol": {"amneziawg", "wireguard", "openvpn", "xray"},
     "stage": {"validation", "preflight", "rpc", "refresh", "complete"},
     "errorKind": {
         "TypeError",

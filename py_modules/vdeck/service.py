@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .backends import AmneziaWGBackend, BackendContext, BackendRegistry, OpenVPNBackend, WireGuardBackend
+from .backends.xray import XrayBackend
 from .binaries import BinaryManager
 from .diagnostics import DiagnosticsManager
 from .errors import VDeckError, ok
@@ -22,6 +23,7 @@ from .migration import MigrationManager
 from .models import ConnectionState, Protocol
 from .network import DnsManager, FirewallManager, NetworkInspector, RouteManager
 from .parsers import parse_config
+from .premium import PremiumManager
 from .runner import CommandResult, CommandRunner, check_loader_error, child_environment
 from .security import ensure_regular_file, sanitize
 from .storage import VDeckStore, display_name_from_path, utc_now
@@ -56,8 +58,12 @@ class VDeckService:
         self.dns = DnsManager(self.runner, self.store.runtime / "dns-ownership.json")
         self.firewall = FirewallManager(self.runner)
         context = BackendContext(self.store, self.binaries, self.runner, self.inspector, self.routes, self.dns)
-        self.registry = BackendRegistry([AmneziaWGBackend(context), WireGuardBackend(context), OpenVPNBackend(context)])
+        self.registry = BackendRegistry(
+            [AmneziaWGBackend(context), WireGuardBackend(context), OpenVPNBackend(context), XrayBackend(context)]
+        )
         self.manager = VPNManager(self.store, self.registry, self.firewall, self.errors)
+        self.premium = PremiumManager(self.store, self.binaries)
+        self.manager.premium = self.premium
         self.diagnostics = DiagnosticsManager(
             self.store, self.registry, self.runner, self.inspector, self.firewall, self.binaries, self.errors
         )
@@ -329,6 +335,40 @@ class VDeckService:
 
     async def disconnect(self) -> dict[str, Any]:
         return await self._rpc(lambda: self.manager.stop(manual=True))
+
+    async def premium_subscriptions(self) -> dict[str, Any]:
+        async def operation() -> dict[str, Any]:
+            return ok(subscriptions=self.premium.subscriptions())
+
+        return await self._rpc(operation)
+
+    async def premium_import(self, path: str, realpath: str = "") -> dict[str, Any]:
+        async def operation() -> dict[str, Any]:
+            async with self.manager.lock:
+                source = self._accessible_import_path(realpath, path)
+                return ok(subscription=await self.premium.import_subscription(source))
+
+        return await self._rpc(operation)
+
+    async def premium_locations(self, subscription_id: str) -> dict[str, Any]:
+        async def operation() -> dict[str, Any]:
+            async with self.manager.lock:
+                return ok(subscription=await self.premium.locations(subscription_id))
+
+        return await self._rpc(operation)
+
+    async def premium_select(self, subscription_id: str, country: str) -> dict[str, Any]:
+        async def operation() -> dict[str, Any]:
+            async with self.manager.lock:
+                # Do not replace keys or endpoints while a tunnel/recovery owns
+                # them. Explicit OFF also clears any persistent Kill Switch.
+                runtime = self.store.load_runtime()
+                if runtime.state != ConnectionState.DISCONNECTED.value or runtime.firewall_active:
+                    raise VDeckError("PREMIUM_DISCONNECT_REQUIRED", "Disconnect VPN before changing Premium location")
+                metadata = await self.premium.select(subscription_id, country)
+                return ok(connection=metadata.to_dict())
+
+        return await self._rpc(operation)
 
     async def rename_connection(self, connection_id: str, display_name: str) -> dict[str, Any]:
         async def operation() -> dict[str, Any]:

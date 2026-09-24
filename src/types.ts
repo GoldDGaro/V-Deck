@@ -1,4 +1,4 @@
-export type Protocol = "amneziawg" | "wireguard" | "openvpn";
+export type Protocol = "amneziawg" | "wireguard" | "openvpn" | "xray";
 export type RuntimeStatus =
   | "DISCONNECTED"
   | "CONNECTING"
@@ -20,6 +20,20 @@ export interface Connection {
   requires_key_passphrase: boolean;
   migration_source: string | null;
   import_error: string | null;
+  premium_id?: string | null;
+  premium_country?: string | null;
+}
+
+export interface PremiumSubscription {
+  id: string;
+  locations: { code: string; name: string }[];
+  country: string | null;
+  connection_id: string | null;
+}
+
+export interface PremiumResponse extends RpcResponse {
+  subscriptions?: PremiumSubscription[];
+  subscription?: PremiumSubscription;
 }
 
 export interface Settings {

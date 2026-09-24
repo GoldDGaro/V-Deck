@@ -11,11 +11,10 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from .errors import VDeckError
-from .security import sanitize, secure_write
+from .security import sanitize
 
 
 def native_output_summary(raw: bytes) -> str:
@@ -57,6 +56,15 @@ def native_output_summary(raw: bytes) -> str:
         "sigint",
         "error while loading shared libraries",
         "symbol lookup error",
+        "reality",
+        "invalid connection",
+        "failed to process outbound traffic",
+        "failed to find an available destination",
+        "sending handshake initiation",
+        "receiving handshake response",
+        "handshake did not complete",
+        "failed to send handshake",
+        "failed to receive handshake",
     )
     return "; ".join(token for token in known if token.encode() in lowered) or "NATIVE_OUTPUT_WITHHELD"
 
@@ -172,8 +180,6 @@ class CommandRunner:
         self._output_tasks: dict[int, asyncio.Task[None]] = {}
 
     async def _drain_output(self, process: asyncio.subprocess.Process, binary: str, path: Path) -> None:
-        handler = RotatingFileHandler(path, maxBytes=128 * 1024, backupCount=1, encoding="utf-8")
-        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
         pending = b""
         last_summary = ""
         repeated = 0
@@ -181,7 +187,6 @@ class CommandRunner:
 
         def emit(summary: str) -> None:
             self.logger.info("native output binary=%s pid=%s stderr_summary=%s", binary, process.pid, summary)
-            handler.emit(logging.LogRecord(binary, logging.INFO, "", 0, summary, (), None))
 
         def record(raw: bytes) -> None:
             nonlocal last_summary, repeated, last_emit
@@ -209,7 +214,6 @@ class CommandRunner:
         finally:
             if repeated:
                 emit(f"{last_summary}; repeated={repeated}")
-            handler.close()
 
     async def _finish_output(self, pid: int) -> None:
         task = self._output_tasks.pop(pid, None)
@@ -298,9 +302,6 @@ class CommandRunner:
         if not args or any(not isinstance(item, str) or "\x00" in item for item in args):
             raise VDeckError("COMMAND_INVALID", "Invalid process command")
         merged_env = child_environment(env, bundled=bundled)
-        if stdout_path:
-            # Truncate old raw logs; only classified output may reach disk now.
-            secure_write(stdout_path, b"")
         process = await asyncio.create_subprocess_exec(
             *args,
             stdin=asyncio.subprocess.DEVNULL,

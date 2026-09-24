@@ -13,6 +13,8 @@ from vdeck.runner import CommandResult
 
 
 class FakeStore:
+    logger = None
+
     def parsed_runtime_info(self, connection_id):
         return {"allowed_ips": ["0.0.0.0/0"], "endpoints": ["vpn.example.com:51820"]}
 

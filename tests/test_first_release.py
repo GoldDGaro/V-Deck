@@ -14,6 +14,7 @@ import test_runtime_pipeline as runtime_fixture
 from test_parsers import native_vpn
 from vdeck.atomic import atomic_write_json
 from vdeck.errors import VDeckError
+from vdeck.logging_utils import daily_log_path
 from vdeck.network import NetworkInspector
 from vdeck.runner import CommandResult
 
@@ -86,7 +87,7 @@ class FirstReleaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await self.assert_clean(connection)
         for stage in ("CONNECTING", "CONNECTED", "DISCONNECTING", "DISCONNECTED"):
             self.assertIn(stage, transitions)
-        text = (self.service.store.logs / "vdeck.log").read_text(encoding="utf-8")
+        text = daily_log_path(self.service.store.logs).read_text(encoding="utf-8")
         for stage in ("VALIDATE", "ENDPOINT", "PROCESS", "SETCONF", "INTERFACE", "ROUTE", "DNS", "HEALTH"):
             self.assertIn(f"stage={stage}", text)
         self.assertIn("cleanup completed", text)
@@ -166,7 +167,7 @@ class FirstReleaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(backend, "resolve_endpoint_cache", AsyncMock(side_effect=ValueError(secret))):
             response = await self.service.connect(connection)
         self.assertEqual(response["code"], "START_FAILED")
-        logs = (self.service.store.logs / "vdeck.log").read_text(encoding="utf-8")
+        logs = daily_log_path(self.service.store.logs).read_text(encoding="utf-8")
         self.assertIn("stage=ENDPOINT", logs)
         self.assertIn("Traceback (sanitized", logs)
         self.assertIn("ValueError", logs)
@@ -295,7 +296,7 @@ class FirstReleaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await self.service._watch_network_devices()
         self.assertEqual(raised.exception.code, "COMMAND_LOADER_FAILED")
         self.assertEqual(spawn.call_args.kwargs["env"]["LD_LIBRARY_PATH"], "/host/lib")
-        text = (self.service.store.logs / "vdeck.log").read_text(encoding="utf-8")
+        text = daily_log_path(self.service.store.logs).read_text(encoding="utf-8")
         self.assertIn("stage=NETWORK_MONITOR exit_code=127", text)
         self.assertIn("symbol lookup error", text)
         self.assertNotIn("never-show", text)
@@ -306,7 +307,7 @@ class FirstReleaseLifecycleTests(unittest.IsolatedAsyncioTestCase):
         with patch("vdeck.service.parse_config", side_effect=ValueError(secret)):
             result = await self.service.validate_import("amneziawg", str(self.root / "awg-vpn.vpn"))
         self.assertEqual(result["code"], "INTERNAL_ERROR")
-        text = (self.service.store.logs / "vdeck.log").read_text(encoding="utf-8")
+        text = daily_log_path(self.service.store.logs).read_text(encoding="utf-8")
         self.assertNotIn(secret, text + json.dumps(result))
         self.assertIn("ValueError", text)
         self.assertIn(connection, json.dumps(await self.service.get_snapshot()))

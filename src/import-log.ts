@@ -70,7 +70,11 @@ export function logImport(
   const fields: Record<string, string | number | boolean> = {
     sequence: ++sequence,
   };
-  if (["amneziawg", "wireguard", "openvpn"].includes(details.protocol ?? ""))
+  if (
+    ["amneziawg", "wireguard", "openvpn", "xray"].includes(
+      details.protocol ?? "",
+    )
+  )
     fields.protocol = details.protocol!;
   for (const key of [
     "filePathPresent",

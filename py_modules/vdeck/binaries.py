@@ -9,6 +9,8 @@ from pathlib import Path
 from .errors import VDeckError
 
 VERSIONS = {
+    "premium-api": "0.1.0",
+    "xray": "26.3.27",
     "amneziawg-go": "3.1.20260828",
     "awg": "3.1.20260812",
     "wireguard-go": "0.0.20250522",
@@ -16,6 +18,8 @@ VERSIONS = {
     "openvpn": "2.7.6",
 }
 HASHES = {
+    "premium-api": "436324c8b9177bd3a02a81708f2c53fc5a36762716c2fcade8246fd9d395d886",
+    "xray": "8255dd939c34cf966cc91517b6324dd3c8d0bcf49ffac8beca049a38c46845ed",
     "amneziawg-go": "1bcfbc0e24e431d20e284699d8a9b4acd22df8072c6731707699f7b009d65eaa",
     "awg": "3ff472d58270c938a95693e56a93961ae145ae4d2242d5adca900956707ca92d",
     "wireguard-go": "0fbe1b8f2a145b928a070b067e3c34ade18bcf85ce1b745a1536fe5ad4404cb3",

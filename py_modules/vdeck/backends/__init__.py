@@ -3,6 +3,7 @@ from .base import BackendContext, VPNBackend
 from .openvpn import OpenVPNBackend
 from .registry import BackendRegistry
 from .wireguard import WireGuardBackend
+from .xray import XrayBackend
 
 __all__ = [
     "AmneziaWGBackend",
@@ -11,4 +12,5 @@ __all__ = [
     "OpenVPNBackend",
     "VPNBackend",
     "WireGuardBackend",
+    "XrayBackend",
 ]

@@ -14,6 +14,7 @@ from test_parsers import native_vpn
 from test_userspace_lifecycle import SimulatedLinux
 from vdeck.dns import DnsManager
 from vdeck.errors import VDeckError
+from vdeck.logging_utils import daily_log_path
 from vdeck.models import RuntimeState
 from vdeck.network import FirewallManager, NetworkInspector, RouteManager
 from vdeck.runner import CommandResult
@@ -362,7 +363,7 @@ class RuntimePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.system.fail_stage = "dns"
         self.assertFalse((await self.service.connect(connection_id))["success"])
         self.assertEqual(len((await self.service.get_snapshot())["connections"]), 1)
-        log = (self.service.store.logs / "vdeck.log").read_text(encoding="utf-8")
+        log = daily_log_path(self.service.store.logs).read_text(encoding="utf-8")
         for marker in ("profile audit", "network environment", "DNS backend selected", "exit_code=1", "DNS restored"):
             self.assertIn(marker, log)
         self.assertNotIn("never-log-this-secret", log)

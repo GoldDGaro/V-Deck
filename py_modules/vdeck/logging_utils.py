@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
+import sys
 import traceback
-from logging.handlers import RotatingFileHandler
+from contextlib import suppress
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from .atomic import atomic_write_json, read_json
 from .errors import VDeckError
@@ -42,14 +47,83 @@ class SanitizingFormatter(logging.Formatter):
         return sanitize(super().format(record))
 
 
+def daily_log_path(log_dir: Path) -> Path:
+    return log_dir / f"vdeck-{date.today().isoformat()}.log"
+
+
+class DailyLogHandler(logging.FileHandler):
+    """One append-only file per local calendar day, including across restarts.
+
+    Retain today and the previous two dates. Only recognized plugin log files
+    are eligible for deletion; never follow symlinks or recurse into folders.
+    """
+
+    def __init__(self, log_dir: Path):
+        self.log_dir = log_dir.resolve()
+        self.day = date.today()
+        self.prune()
+        super().__init__(daily_log_path(self.log_dir), mode="a", encoding="utf-8", delay=True)
+
+    def prune(self) -> None:
+        cutoff = date.today() - timedelta(days=2)
+        for path in self.log_dir.iterdir():
+            if path.is_symlink() or not path.is_file():
+                continue
+            match = re.fullmatch(r"vdeck-(\d{4}-\d{2}-\d{2})\.log", path.name)
+            try:
+                if match:
+                    logged_day = date.fromisoformat(match[1])
+                elif re.fullmatch(
+                    r"(?:vdeck|[0-9a-f-]{36}|\d{4}-\d{2}-\d{2} \d{2}\.\d{2}\.\d{2})\.log(?:\.\d+)?",
+                    path.name,
+                ):
+                    logged_day = datetime.fromtimestamp(path.stat().st_mtime).date()
+                else:
+                    continue
+                if logged_day < cutoff:
+                    path.unlink()
+            except (OSError, ValueError):
+                # Failure to remove an old log must not stop VPN cleanup.
+                continue
+
+    def _open(self) -> Any:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+        if Path(self.baseFilename).is_symlink():
+            raise OSError("Refusing symlink log file")
+        fd = os.open(self.baseFilename, flags, 0o600)
+        fchmod = getattr(os, "fchmod", None)
+        if fchmod is not None:
+            fchmod(fd, 0o600)
+        return os.fdopen(fd, "a", encoding="utf-8")
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if date.today() != self.day:
+                if self.stream:
+                    self.stream.close()
+                    self.stream = None  # type: ignore[assignment]
+                self.day = date.today()
+                self.prune()
+                self.baseFilename = str(daily_log_path(self.log_dir))
+            super().emit(record)
+        except (OSError, ValueError):
+            self.handleError(record)
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        # logging's default handler prints raw msg/args on failure, potentially
+        # bypassing the sanitizer. Never let disk failure prevent VPN cleanup.
+        with suppress(OSError, ValueError):
+            sys.stderr.write("V-Deck LOG_WRITE_FAILED: daily technical log unavailable\n")
+
+
 def create_logger(log_dir: Path) -> logging.Logger:
     secure_mkdir(log_dir)
     logger = logging.getLogger(f"vdeck.{log_dir}")
     logger.setLevel(logging.INFO)
     logger.propagate = False
     if not logger.handlers:
-        handler = RotatingFileHandler(log_dir / "vdeck.log", maxBytes=512 * 1024, backupCount=3, encoding="utf-8")
-        handler.setFormatter(SanitizingFormatter("%(asctime)s %(levelname)s %(message)s"))
+        handler = DailyLogHandler(log_dir)
+        handler.setFormatter(SanitizingFormatter("%(asctime)s %(levelname)s pid=%(process)d %(message)s"))
         logger.addHandler(handler)
     return logger
 

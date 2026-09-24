@@ -21,6 +21,10 @@
     }
   },
   "sources": {
+    "xray-core": {
+      "tag": "v26.3.27",
+      "commit": "d2758a023cd7f4174a5a5fa4ff66e487d4342ba0"
+    },
     "amneziawg-go": {
       "tag": "v3.1.20260828",
       "commit": "b5928efb6ca19f0153958460c3d141f04abc5c2e"
@@ -47,6 +51,18 @@
     }
   },
   "components": {
+    "premium-api": {
+      "version": "0.1.0",
+      "binary_sha256": "436324c8b9177bd3a02a81708f2c53fc5a36762716c2fcade8246fd9d395d886",
+      "origin": "V-Deck backend/premium, Go 1.25.14, CGO_ENABLED=0 linux/amd64"
+    },
+    "xray": {
+      "version": "26.3.27",
+      "binary_sha256": "8255dd939c34cf966cc91517b6324dd3c8d0bcf49ffac8beca049a38c46845ed",
+      "origin": "official upstream Linux amd64 release (Go 1.26.1)",
+      "archive_url": "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip",
+      "archive_sha256": "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae"
+    },
     "amneziawg-go": {
       "version": "v3.1.20260828",
       "binary_sha256": "1bcfbc0e24e431d20e284699d8a9b4acd22df8072c6731707699f7b009d65eaa"

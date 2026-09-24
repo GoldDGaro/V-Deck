@@ -10,6 +10,7 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
 SOURCES = {
+    "xray-core": "https://github.com/XTLS/Xray-core.git",
     "amneziawg-go": "https://github.com/amnezia-vpn/amneziawg-go.git",
     "amneziawg-tools": "https://github.com/amnezia-vpn/amneziawg-tools.git",
     "wireguard-go": "https://git.zx2c4.com/wireguard-go",

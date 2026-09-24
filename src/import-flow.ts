@@ -22,7 +22,7 @@ export function prepareImport(
   if (
     !validation ||
     !validation.success ||
-    !["wireguard", "amneziawg", "openvpn"].includes(protocol) ||
+    !["wireguard", "amneziawg", "openvpn", "xray"].includes(protocol) ||
     typeof path !== "string" ||
     !path.trim() ||
     path !== validation.path ||

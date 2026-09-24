@@ -119,6 +119,7 @@ class UserspaceStartupMixin:
             resolve_endpoint=AsyncMock(return_value=["198.51.100.1"]),
             vpn_routes_present=AsyncMock(return_value=True),
             interface_ready=AsyncMock(return_value=True),
+            tunnel_mtu=AsyncMock(return_value=1420),
             dns_probe=AsyncMock(return_value=True),
             tcp_probe=AsyncMock(return_value=False),
             route_to=AsyncMock(side_effect=lambda _: (None, self.store.load_runtime().interface or "wlan0")),

@@ -359,11 +359,11 @@ def _qt_uncompress(value: bytes) -> bytes:
         return result + decompressor.flush()
 
     if len(value) >= 6:
-        expected = int.from_bytes(value[:4], "big")
         try:
-            result = decompress_limited(value[4:])
-            if expected == len(result):
-                return result
+            # Qt treats the four-byte size prefix as an allocation hint, not
+            # an integrity check. Premium exports can carry a stale hint.
+            # Bound actual decompressed bytes instead; never allocate by hint.
+            return decompress_limited(value[4:])
         except zlib.error:
             pass
     try:
@@ -568,6 +568,22 @@ def parse_openvpn(path: Path) -> ParsedConfig:
 
 def parse_config(protocol: Protocol, path: Path) -> ParsedConfig:
     suffix = path.suffix.lower()
+    if protocol == Protocol.XRAY:
+        from .xray_config import normalize_xray
+
+        if suffix not in {".json", ".txt", ".conf", ".vless"}:
+            raise VDeckError("CONFIG_EXTENSION", "Xray Reality requires JSON or a text file containing a vless:// link")
+        outbound, endpoints, dns = normalize_xray(_decode_text(path))
+        return ParsedConfig(
+            protocol=Protocol.XRAY.value,
+            runtime_config=json.dumps({"outbounds": [outbound]}),
+            source_format=suffix,
+            endpoints=endpoints,
+            dns_servers=dns,
+            interface_addresses=["198.18.0.1/32", "fdfe:dcba:9876::1/128"],
+            allowed_ips=["0.0.0.0/0", "::/0"],
+            mtu=1500,
+        )
     if protocol == Protocol.OPENVPN:
         if suffix != ".ovpn":
             raise VDeckError("CONFIG_EXTENSION", "OpenVPN requires an .ovpn file")

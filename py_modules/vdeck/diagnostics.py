@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import platform
 import re
 from contextlib import suppress
@@ -13,11 +14,11 @@ from typing import Any
 
 from .atomic import atomic_write_bytes
 from .backends.registry import BackendRegistry
-from .backends.wireguard import handshake_probe_target
+from .backends.wireguard import effective_routes, traffic_probe_targets
 from .binaries import BinaryManager
 from .dns import DnsManager
-from .logging_utils import ErrorHistory
-from .models import CheckStatus
+from .logging_utils import ErrorHistory, daily_log_path
+from .models import CheckStatus, ConnectionState, RuntimeState
 from .network import FirewallManager, NetworkInspector
 from .runner import CommandRunner
 from .security import sanitize, sanitize_report
@@ -61,6 +62,64 @@ class DiagnosticsManager:
         self.binaries = binaries
         self.errors = errors
 
+    def _same_session(self, runtime: RuntimeState) -> bool:
+        current = self.store.load_runtime()
+        return current.state == ConnectionState.CONNECTED.value and (
+            current.connection_id,
+            current.interface,
+            current.started_at,
+        ) == (runtime.connection_id, runtime.interface, runtime.started_at)
+
+    async def _measure_ping(self, runtime: RuntimeState, routes: list[str]) -> int | None:
+        logger = getattr(self.runner, "logger", None) or logging.getLogger(__name__)
+        for targets in traffic_probe_targets(routes).values():
+            for target in targets:
+                # Never continue probing a stale interface after Disconnect/switch.
+                if not runtime.interface or not self._same_session(runtime):
+                    return None
+                code, exit_code, exception, ping_ms = "PING_FAILED", None, None, None
+                try:
+                    _, device = await self.inspector.route_to(target)
+                    if device != runtime.interface:
+                        code = "PING_ROUTE_MISMATCH"
+                        continue
+                    ping = await self.runner.run(
+                        [
+                            "ping",
+                            "-6" if ":" in target else "-4",
+                            "-I",
+                            runtime.interface,
+                            "-c",
+                            "1",
+                            "-W",
+                            "3",
+                            target,
+                        ],
+                        check=False,
+                        timeout=5,
+                    )
+                    exit_code = ping.returncode
+                    match = re.search(r"time[=<]([0-9.]+)\s*ms", ping.stdout)
+                    if exit_code == 0 and match:
+                        ping_ms = round(float(match.group(1)))
+                        code = "OK"
+                        return ping_ms
+                except Exception as exc:
+                    # Never copy raw command output, configuration or exception text.
+                    exception = type(exc).__name__
+                finally:
+                    logger.info(
+                        "diagnostic ping stage=PING target=%s interface=%s code=%s "
+                        "exit_code=%s exception=%s ping_ms=%s",
+                        target,
+                        runtime.interface,
+                        code,
+                        exit_code,
+                        exception,
+                        ping_ms,
+                    )
+        return None
+
     async def collect(self, connection_id: str, *, include_external_ip: bool = False) -> dict[str, Any]:
         metadata = self.store.get(connection_id)
         runtime = self.store.load_runtime()
@@ -74,6 +133,8 @@ class DiagnosticsManager:
             status = {"connected": False, "tunnel": False, "rx_bytes": 0, "tx_bytes": 0}
         info = self.store.parsed_runtime_info(connection_id)
         configured_routes = [str(item) for item in info.get("allowed_ips", [])]
+        if active and runtime.interface and metadata.protocol in {"wireguard", "amneziawg"}:
+            configured_routes = effective_routes(info)
         full = any(item in {"0.0.0.0/0", "::/0"} for item in configured_routes)
         initial_rx = int(status.get("rx_bytes", 0))
         initial_tx = int(status.get("tx_bytes", 0))
@@ -81,17 +142,12 @@ class DiagnosticsManager:
         ping_available = True
         if active and status.get("connected"):
             try:
-                target = handshake_probe_target(configured_routes)
-                if not target or not runtime.interface:
-                    raise ValueError("No tunnel probe destination")
-                ping = await self.runner.run(
-                    ["ping", "-6" if ":" in target else "-4", "-I", runtime.interface, "-c", "1", "-W", "3", target],
-                    check=False,
-                    timeout=5,
-                )
-                match = re.search(r"time[=<]([0-9.]+)\s*ms", ping.stdout)
-                if match:
-                    ping_ms = round(float(match.group(1)))
+                if metadata.protocol == "xray":
+                    raise ValueError("ICMP is not supported by this Xray TUN")
+                ping_ms = await self._measure_ping(runtime, configured_routes)
+                if not self._same_session(runtime):
+                    ping_ms = None
+                if ping_ms is not None:
                     # A probe yields: do not resurrect a deleted profile or
                     # overwrite a concurrent rename with its stale metadata.
                     current = self.store.get(connection_id)
@@ -118,7 +174,7 @@ class DiagnosticsManager:
             ipv6_underlay: bool | None = await self.inspector.public_ipv6_present()
         except Exception:
             ipv6_underlay = None
-        vpn_has_ipv6 = any(":" in str(value) for value in info.get("allowed_ips", []))
+        vpn_has_ipv6 = any(":" in value for value in configured_routes)
         ipv6_status = CheckStatus.OK
         ipv6_detail = ""
         if ipv6_underlay is None:
@@ -146,7 +202,9 @@ class DiagnosticsManager:
                 else CheckStatus.ERROR
             ),
             "handshake_state": check(
-                CheckStatus.UNKNOWN
+                CheckStatus.NOT_APPLICABLE
+                if metadata.protocol == "xray"
+                else CheckStatus.UNKNOWN
                 if not backend_available
                 else CheckStatus.WARNING
                 if status.get("connected") and status.get("handshake_fresh") is False
@@ -211,9 +269,11 @@ class DiagnosticsManager:
         with suppress(OSError):
             os_release = Path("/etc/os-release").read_text(encoding="utf-8")
         logs = ""
-        log_path = self.store.logs / "vdeck.log"
+        log_path = daily_log_path(self.store.logs)
         if log_path.exists():
-            logs = log_path.read_text(encoding="utf-8", errors="replace")[-100_000:]
+            with log_path.open("rb") as stream:
+                stream.seek(max(0, log_path.stat().st_size - 100_000))
+                logs = stream.read(100_000).decode("utf-8", errors="replace")
         report = {
             "vdeck_version": "0.1.0",
             "steamos": sanitize(os_release),

@@ -223,6 +223,44 @@ afterEach(() => {
 });
 
 describe("rendered Decky import flow", () => {
+  it("imports Xray JSON through the rendered picker and returns to the main list", async () => {
+    const path = "/home/deck/Downloads/reality.json";
+    const reality = {
+      ...connection,
+      protocol: "xray" as const,
+      display_name: "Reality",
+    };
+    mocks.validateImport.mockResolvedValue({
+      ...validation,
+      path,
+      protocol: "xray",
+      suggested_name: "Reality",
+    });
+    mocks.openFilePicker.mockResolvedValue({ path, realpath: path });
+    mocks.importConnection.mockImplementation(async () => {
+      mocks.getSnapshot.mockResolvedValue({
+        ...emptySnapshot,
+        connections: [reality],
+      });
+      return { success: true, code: "OK", connection: reality };
+    });
+    render(<DeckyHost plugin={createPlugin()} visible />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add VPN" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xray Reality" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Import" }));
+    await screen.findByText("Reality", { selector: "strong" });
+    expect(mocks.validateImport).toHaveBeenCalledWith("xray", path, path);
+    expect(mocks.importConnection).toHaveBeenCalledTimes(1);
+    expect(mocks.importConnection.mock.calls[0]?.[0]).toBe("xray");
+    expect(mocks.openFilePicker.mock.calls[0]?.[5]).toEqual([
+      "json",
+      "txt",
+      "conf",
+      "vless",
+    ]);
+    expect(screen.getByRole("button", { name: "Add VPN" })).toBeTruthy();
+  });
+
   it("keeps the Connect error code if its following snapshot also fails", async () => {
     mocks.getSnapshot.mockResolvedValue({
       ...emptySnapshot,

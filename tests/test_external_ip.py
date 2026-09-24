@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from vdeck.errors import VDeckError
 from vdeck.external_ip import IP_PROVIDERS, SYSTEM_CA_FILES, NoRedirect, _lookup, host_tls_context, lookup_external_ip
+from vdeck.logging_utils import daily_log_path
 from vdeck.models import Protocol, RuntimeState
 from vdeck.service import VDeckService
 
@@ -157,7 +158,7 @@ class ExternalIpServiceTests(unittest.IsolatedAsyncioTestCase):
             diagnostics = await self.service.get_diagnostics(self.connection.id)
             self.assertEqual(diagnostics["diagnostics"]["external_ip_checks"], samples)
             self.assertEqual(lookup.await_count, 2)  # opening diagnostics is not a third request
-        log = (self.service.store.logs / "vdeck.log").read_text(encoding="utf-8")
+        log = daily_log_path(self.service.store.logs).read_text(encoding="utf-8")
         self.assertNotIn("8.8.8.8", log)
         for path in self.service.store.state_dir.glob("*.json"):
             self.assertNotIn("external_ip_checks", path.read_text(encoding="utf-8"))

@@ -1,5 +1,21 @@
 # Native binary build / Сборка нативных бинарников
 
+## Premium API helper
+
+`backend/premium` builds the original `premium-api` helper using pinned Go 1.25.14,
+CGO disabled and linux/amd64 target. It only performs HTTPS API requests and exits;
+it is not a VPN daemon. See `premium/main.go` for protocol provenance and tests.
+
+## Xray 26.3.27 (local preview)
+
+Unlike the existing AWG/WG/OpenVPN source builds below, Xray uses the official
+Linux amd64 release prebuilt with Go 1.26.1. The exact archive URL/SHA-256, executable
+SHA-256 and source commit are pinned in versions.json. Docker retrieves and verifies
+that archive; it does not claim to reproduce Xray's upstream build. No Docker is needed
+on Steam Deck. The local release builder includes bin/xray with executable mode and
+the source archive includes research/xray-core. Run verify_release and verify_source
+after packaging; Linux execution and physical TUN behavior still need a Deck test.
+
 ## Русский
 
 Docker используется только сопровождающими разработчиками и GitHub Actions для воспроизводимой сборки пяти Linux x86-64 компонентов. Он не запускается V-Deck, не входит в установочный ZIP и не требуется пользователю или Steam Deck.

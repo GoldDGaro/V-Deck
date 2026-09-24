@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,17 @@ class Plugin:
         logs_root = Path(logs_value) if logs_value else storage_root / "logs"
         legacy_root = Path(decky.DECKY_USER_HOME) / ".local" / "share" / "vpn-deck" / "configs"
         self.service = VDeckService(storage_root, PLUGIN_ROOT, legacy_root, runtime_root, logs_root)
+        # Decky's plugin-specific logger shares the same daily sanitized sink.
+        for handler in list(decky.logger.handlers):
+            decky.logger.removeHandler(handler)
+            handler.close()
+        for handler in self.service.logger.handlers:
+            decky.logger.addHandler(handler)
+        decky.logger.propagate = False
+        package_logger = logging.getLogger("vdeck")
+        package_logger.handlers = list(self.service.logger.handlers)
+        package_logger.setLevel(logging.INFO)
+        package_logger.propagate = False
         await self.service.initialize()
         decky.logger.info("V-Deck 0.1.0 initialized")
 
@@ -61,6 +73,18 @@ class Plugin:
 
     async def connect(self, connection_id: str) -> dict[str, Any]:
         return await self.service.connect(connection_id)
+
+    async def premium_subscriptions(self) -> dict[str, Any]:
+        return await self.service.premium_subscriptions()
+
+    async def premium_import(self, path: str, realpath: str = "") -> dict[str, Any]:
+        return await self.service.premium_import(path, realpath)
+
+    async def premium_locations(self, subscription_id: str) -> dict[str, Any]:
+        return await self.service.premium_locations(subscription_id)
+
+    async def premium_select(self, subscription_id: str, country: str) -> dict[str, Any]:
+        return await self.service.premium_select(subscription_id, country)
 
     async def disconnect(self) -> dict[str, Any]:
         return await self.service.disconnect()

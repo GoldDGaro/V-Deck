@@ -15,6 +15,7 @@ import {
 } from "@decky/api";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FaNetworkWired } from "react-icons/fa";
+import { PremiumPage } from "./premium-ui";
 import {
   checkExternalIp,
   connect,
@@ -62,6 +63,7 @@ import type {
 type Page =
   | "main"
   | "protocol"
+  | "premium"
   | "import"
   | "settings"
   | "diagnostics"
@@ -106,7 +108,9 @@ function protocolLabel(protocol: Protocol): string {
     ? "AmneziaWG"
     : protocol === "wireguard"
       ? "WireGuard"
-      : "OpenVPN";
+      : protocol === "xray"
+        ? "Xray Reality"
+        : "OpenVPN";
 }
 
 function statusKey(status: string): TranslationKey {
@@ -304,7 +308,9 @@ function VDeckContent(): React.ReactElement {
         ? ["conf", "vpn"]
         : nextProtocol === "wireguard"
           ? ["conf"]
-          : ["ovpn"];
+          : nextProtocol === "xray"
+            ? ["json", "txt", "conf", "vless"]
+            : ["ovpn"];
     let validationReturned = false;
     try {
       const picked = await openFilePicker(
@@ -546,22 +552,48 @@ function VDeckContent(): React.ReactElement {
     </PanelSectionRow>
   ) : null;
 
+  if (page === "premium") {
+    return (
+      <div style={panelStyle}>
+        <PremiumPage
+          language={language}
+          onBack={() => setPage("main")}
+          onImported={async () => {
+            await refresh();
+            setPage("main");
+          }}
+        />
+      </div>
+    );
+  }
+
   if (page === "protocol") {
     return (
       <div style={panelStyle}>
         <PanelSection title={t(language, "chooseProtocol")}>
           {errorView}
-          {(["amneziawg", "wireguard", "openvpn"] as Protocol[]).map((item) => (
-            <PanelSectionRow key={item}>
-              <ButtonItem
-                layout="below"
-                disabled={busy}
-                onClick={() => void beginImport(item)}
-              >
-                {protocolLabel(item)}
-              </ButtonItem>
-            </PanelSectionRow>
-          ))}
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              disabled={busy}
+              onClick={() => setPage("premium")}
+            >
+              Amnezia Premium
+            </ButtonItem>
+          </PanelSectionRow>
+          {(["amneziawg", "wireguard", "openvpn", "xray"] as Protocol[]).map(
+            (item) => (
+              <PanelSectionRow key={item}>
+                <ButtonItem
+                  layout="below"
+                  disabled={busy}
+                  onClick={() => void beginImport(item)}
+                >
+                  {protocolLabel(item)}
+                </ButtonItem>
+              </PanelSectionRow>
+            ),
+          )}
           <PanelSectionRow>
             <ButtonItem layout="below" onClick={() => setPage("main")}>
               {t(language, "back")}
@@ -1030,7 +1062,12 @@ function VDeckContent(): React.ReactElement {
                     marginTop: 4,
                   }}
                 >
-                  <span>{protocolLabel(connection.protocol)}</span>
+                  <span>
+                    {protocolLabel(connection.protocol)}
+                    {connection.premium_country
+                      ? ` · ${connection.premium_country}`
+                      : ""}
+                  </span>
                   <span>
                     {t(
                       language,

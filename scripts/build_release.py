@@ -16,7 +16,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 WORK = PROJECT.parent
 DEFAULT_OUTPUT = WORK / "outputs"
 EPOCH = (2026, 8, 31, 0, 0, 0)
-NATIVE_NAMES = {"amneziawg-go", "awg", "wireguard-go", "wg", "openvpn"}
+NATIVE_NAMES = {"amneziawg-go", "awg", "wireguard-go", "wg", "openvpn", "xray", "premium-api"}
 INSTALL_FILES = {
     "main.py",
     "plugin.json",
@@ -30,6 +30,7 @@ INSTALL_FILES = {
     "backend/versions.json",
 }
 SOURCE_REPOSITORIES = (
+    "xray-core",
     "amneziawg-go",
     "amneziawg-tools",
     "wireguard-go",
@@ -45,6 +46,7 @@ COMMON_EXCLUDED_PARTS = frozenset(
         ".mypy_cache",
         ".ruff_cache",
         ".pytest_cache",
+        ".token-optimizer",
         "outputs",
     }
 )

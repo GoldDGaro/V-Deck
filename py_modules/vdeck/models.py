@@ -11,6 +11,7 @@ class Protocol(str, Enum):
     AMNEZIAWG = "amneziawg"
     WIREGUARD = "wireguard"
     OPENVPN = "openvpn"
+    XRAY = "xray"
 
 
 class ConnectionState(str, Enum):
@@ -49,6 +50,8 @@ class ConnectionMetadata:
     requires_key_passphrase: bool = False
     migration_source: str | None = None
     import_error: str | None = None
+    premium_id: str | None = None
+    premium_country: str | None = None
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> ConnectionMetadata:

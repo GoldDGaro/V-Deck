@@ -15,7 +15,7 @@ from typing import Any
 from ..errors import VDeckError
 from ..logging_utils import safe_exception_details
 from ..models import ConnectionMetadata, RuntimeState
-from ..network import Ipv6Guard, RouteRecord, interface_name
+from ..network import Ipv6Guard, RouteRecord, first_success, interface_name
 from ..parsers import ParsedConfig, validate_wireguard_network
 from ..runner import OwnedProcess
 from .base import VPNBackend
@@ -29,6 +29,45 @@ def handshake_probe_target(allowed_ips: list[str]) -> str | None:
             return "1.1.1.1" if network.version == 4 else "2606:4700:4700::1111"
         return str(next(network.hosts(), network.network_address))
     return None
+
+
+def traffic_probe_targets(allowed_ips: list[str]) -> dict[int, list[str]]:
+    """Independent operators, restricted to configured tunnel destinations.
+
+    Public resolvers offer ICMP/TCP 443 reachability, not a guarantee that any
+    particular game works. Private-only split tunnels keep their existing target.
+    """
+    candidates = {
+        4: ("1.1.1.1", "8.8.8.8", "9.9.9.9"),
+        6: ("2606:4700:4700::1111", "2001:4860:4860::8888", "2620:fe::fe"),
+    }
+    result: dict[int, list[str]] = {}
+    for family, addresses in candidates.items():
+        networks = [ipaddress.ip_network(value, strict=False) for value in allowed_ips]
+        networks = [network for network in networks if network.version == family]
+        if not networks:
+            continue
+        targets = [address for address in addresses if any(ipaddress.ip_address(address) in n for n in networks)]
+        if not targets:
+            first = handshake_probe_target([str(network) for network in networks])
+            targets = [first] if first else []
+        result[family] = targets
+    return result
+
+
+def effective_routes(info: dict[str, Any]) -> list[str]:
+    """IPv4-only full-tunnel exports often include ::/0 as an IPv6 leak sink.
+
+    Reject that traffic explicitly instead of creating unusable IPv6 routes.
+    Never mutate the imported config or silently drop split-tunnel networks.
+    """
+    routes = [str(value) for value in info.get("allowed_ips", [])]
+    has_v6 = any(":" in str(value) for value in info.get("interface_addresses", []))
+    if not has_v6 and any(":" in value for value in routes):
+        if "0.0.0.0/0" not in routes or "::/0" not in routes or any(":" in str(v) for v in info.get("dns_servers", [])):
+            raise VDeckError("CONFIG_IPV6_ADDRESS_REQUIRED", "IPv6 routes/DNS require a tunnel IPv6 address")
+        return [value for value in routes if ":" not in value]
+    return routes
 
 
 def endpoint_with_address(endpoint: str, address: str) -> str:
@@ -220,7 +259,8 @@ class WireGuardBackend(VPNBackend):
             dns_servers=normalized.dns_servers,
         )
         addresses = list(info.get("interface_addresses", []))
-        allowed_ips = list(info.get("allowed_ips", []))
+        allowed_ips = effective_routes(info)
+        info["allowed_ips"] = allowed_ips
         dns_servers = list(info.get("dns_servers", []))
         if not addresses or not allowed_ips:
             raise VDeckError("TUNNEL_ADDRESS_MISSING", "The VPN needs interface addresses and AllowedIPs")
@@ -271,7 +311,9 @@ class WireGuardBackend(VPNBackend):
             for address in info.get("interface_addresses", []):
                 family = "-6" if ":" in str(address) else "-4"
                 await self.context.runner.run(["ip", family, "address", "replace", str(address), "dev", interface])
-            mtu = info.get("mtu") or 1420
+            mtu = await self.context.inspector.tunnel_mtu(
+                self.endpoint_addresses(runtime), info.get("mtu"), ipv6=any(":" in value for value in addresses)
+            )
             await self.context.runner.run(["ip", "link", "set", "dev", interface, "mtu", str(mtu), "up"])
             self.logger.info("interface configured interface=%s addresses=%d mtu=%s", interface, len(addresses), mtu)
             if not await self.context.inspector.interface_ready(interface, addresses):
@@ -280,7 +322,12 @@ class WireGuardBackend(VPNBackend):
                 self._stage(runtime, "IPV6_GUARD")
                 runtime.ipv6_guard = True
                 self.context.store.save_runtime(runtime)
-                await Ipv6Guard(self.context.runner).enable(interface, self.endpoint_addresses(runtime))
+                await Ipv6Guard(self.context.runner).enable(
+                    interface,
+                    self.endpoint_addresses(runtime),
+                    allow_tunnel=any(":" in value for value in addresses),
+                )
+                self.logger.info("IPv6 guard enabled protocol=%s ipv6_routes_active=false", self.protocol_id)
 
             def journal_route(record: RouteRecord) -> None:
                 runtime.owned_routes.append(record.to_dict())
@@ -337,7 +384,7 @@ class WireGuardBackend(VPNBackend):
             self.logger.warning(
                 "traffic verification failed stage=HEALTH code=VPN_TRAFFIC_UNCONFIRMED "
                 "protocol=%s interface=%s connected=%s healthy=%s routes=%s probe_succeeded=%s "
-                "handshake_present=%s firewall_active=%s",
+                "handshake_present=%s firewall_active=%s rx_advanced=%s tx_advanced=%s handshake_advanced=%s",
                 self.protocol_id,
                 interface,
                 bool(health.get("connected")),
@@ -346,6 +393,9 @@ class WireGuardBackend(VPNBackend):
                 bool(health.get("probe_succeeded")),
                 bool(health.get("latest_handshake")),
                 runtime.firewall_active,
+                bool(health.get("rx_advanced")),
+                bool(health.get("tx_advanced")),
+                bool(health.get("handshake_advanced")),
             )
             raise VDeckError("VPN_TRAFFIC_UNCONFIRMED", "VPN traffic through the configured routes was not confirmed")
         self.logger.info(
@@ -369,6 +419,7 @@ class WireGuardBackend(VPNBackend):
             except (OSError, VDeckError):
                 await self.context.inspector.tcp_probe(interface, target)
         deadline = asyncio.get_running_loop().time() + 18
+        polls = 0
         while asyncio.get_running_loop().time() < deadline:
             result = await self.context.runner.run(
                 self.context.binaries.command(self.tool_name, "show", interface, "latest-handshakes"),
@@ -377,6 +428,20 @@ class WireGuardBackend(VPNBackend):
                 bundled=True,
             )
             values = [line.rsplit("\t", 1)[-1].strip() for line in result.stdout.splitlines() if line.strip()]
+            polls += 1
+            self.logger.info(
+                "handshake probe protocol=%s interface=%s poll=%d exit_code=%d peers=%d confirmed=%s",
+                self.protocol_id,
+                interface,
+                polls,
+                result.returncode,
+                len(values),
+                any(value.isdigit() and int(value) > 0 for value in values),
+            )
+            if result.returncode:
+                raise VDeckError(
+                    "HANDSHAKE_STATUS_FAILED", "Unable to read VPN handshake state", f"exit_code={result.returncode}"
+                )
             if any(value.isdigit() and int(value) > 0 for value in values):
                 return
             await asyncio.sleep(0.5)
@@ -488,9 +553,62 @@ class WireGuardBackend(VPNBackend):
             "routes": bool(runtime.owned_routes),
         }
 
+    async def _traffic_target(self, interface: str, target: str) -> bool:
+        family = "-6" if ":" in target else "-4"
+        started = time.monotonic()
+        try:
+            _, device = await self.context.inspector.route_to(target)
+        except (OSError, VDeckError) as exc:
+            self.logger.info(
+                "traffic probe stage=ROUTE target=%s interface=%s code=PROBE_ROUTE_FAILED exception=%s",
+                target,
+                interface,
+                type(exc).__name__,
+            )
+            return False
+        if device != interface:
+            self.logger.info(
+                "traffic probe stage=ROUTE target=%s interface=%s code=PROBE_ROUTE_OUTSIDE_TUNNEL", target, interface
+            )
+            return False
+        exit_code = None
+        exception = None
+        try:
+            probe = await self.context.runner.run(
+                ["ping", family, "-I", interface, "-c", "1", "-W", "3", target], check=False, timeout=5
+            )
+            exit_code = probe.returncode
+            succeeded = exit_code == 0
+        except (OSError, VDeckError) as exc:
+            exception = type(exc).__name__
+            succeeded = False
+        self.logger.info(
+            "traffic probe stage=HEALTH method=ICMP target=%s family=%s interface=%s "
+            "code=%s exit_code=%s exception=%s elapsed_ms=%d",
+            target,
+            family,
+            interface,
+            "OK" if succeeded else "PROBE_ICMP_FAILED",
+            exit_code,
+            exception,
+            int((time.monotonic() - started) * 1000),
+        )
+        if not succeeded:
+            succeeded = await self.context.inspector.tcp_probe(interface, target)
+        return succeeded
+
+    async def _traffic_family(self, interface: str, family: int, targets: list[str]) -> bool:
+        succeeded = bool(targets) and await self._traffic_target(interface, targets[0])
+        if not succeeded and len(targets) > 1:
+            # Only probe backups on failure, in parallel with bounded per-probe
+            # timeouts. Cancellation closes pending TCP sockets before cleanup.
+            succeeded = await first_success(self._traffic_target(interface, t) for t in targets[1:])
+        self.logger.info("traffic probe family=-%d succeeded=%s interface=%s", family, succeeded, interface)
+        return succeeded
+
     async def health(self, metadata: ConnectionMetadata, runtime: RuntimeState) -> dict[str, Any]:
         info = self.context.store.parsed_runtime_info(metadata.id)
-        allowed_ips = [str(item) for item in info.get("allowed_ips", [])]
+        allowed_ips = effective_routes(info)
         before = await self.status(metadata, runtime)
         interface = str(before.get("interface") or runtime.interface or interface_name(metadata.id))
         if not before.get("connected") or not before.get("tunnel"):
@@ -503,26 +621,22 @@ class WireGuardBackend(VPNBackend):
                 "probe_succeeded": False,
                 "routes": False,
             }
-        target = handshake_probe_target(allowed_ips)
-        if not target:
+        targets = traffic_probe_targets(allowed_ips)
+        if not targets:
             return {**before, "healthy": False, "probe_succeeded": False, "routes": True}
-        family = "-6" if ":" in target else "-4"
-        try:
-            probe = await self.context.runner.run(
-                ["ping", family, "-I", interface, "-c", "1", "-W", "3", target],
-                check=False,
-                timeout=5,
+        probe_succeeded = all(
+            await asyncio.gather(
+                *(self._traffic_family(interface, family, addresses) for family, addresses in targets.items())
             )
-            probe_succeeded = probe.returncode == 0
-        except (OSError, VDeckError):
-            probe_succeeded = False
-        if not probe_succeeded:
-            probe_succeeded = await self.context.inspector.tcp_probe(interface, target)
+        )
         after = await self.status(metadata, runtime)
         handshake_advanced = int(after.get("latest_handshake", 0)) > int(before.get("latest_handshake", 0))
         received_traffic = int(after.get("rx_bytes", 0)) > int(before.get("rx_bytes", 0))
         transmitted_probe = int(after.get("tx_bytes", 0)) > int(before.get("tx_bytes", 0))
-        healthy = bool(after.get("connected") and (probe_succeeded or handshake_advanced or received_traffic))
+        healthy = bool(
+            after.get("connected")
+            and (probe_succeeded or (len(targets) == 1 and (handshake_advanced or received_traffic)))
+        )
         dns_error: VDeckError | None = None
         if healthy:
             try:

@@ -3,12 +3,27 @@ import type {
   DiagnosticsResponse,
   ExternalIpResponse,
   ImportValidation,
+  PremiumResponse,
   Protocol,
   RpcResponse,
   SnapshotResponse,
 } from "./types";
 
 export const getSnapshot = callable<[], SnapshotResponse>("get_snapshot");
+export const premiumSubscriptions = callable<[], PremiumResponse>(
+  "premium_subscriptions",
+);
+export const premiumImport = callable<
+  [path: string, realpath: string],
+  PremiumResponse
+>("premium_import");
+export const premiumLocations = callable<[id: string], PremiumResponse>(
+  "premium_locations",
+);
+export const premiumSelect = callable<
+  [id: string, country: string],
+  PremiumResponse
+>("premium_select");
 export const logImportEvent = callable<
   [event: string, details: Record<string, string | number | boolean>],
   RpcResponse

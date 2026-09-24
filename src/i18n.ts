@@ -44,7 +44,7 @@ const translations = {
     disconnecting: "Disconnecting…",
     recovering: "Recovering…",
     error: "Connection error",
-    ping: "Ping",
+    ping: "Ping through VPN",
     session: "Session",
     received: "Received",
     sent: "Sent",
@@ -129,7 +129,7 @@ const translations = {
     disconnecting: "Отключение…",
     recovering: "Восстановление…",
     error: "Ошибка подключения",
-    ping: "Пинг",
+    ping: "Пинг через VPN",
     session: "Сессия",
     received: "Получено",
     sent: "Отправлено",
@@ -180,6 +180,10 @@ export function t(language: Language, key: TranslationKey): string {
 }
 
 const stableErrorKeys: Record<string, TranslationKey> = {
+  TUNNEL_MTU_UNSUPPORTED: "networkSetupFailed",
+  XRAY_CONFIG_UNSUPPORTED: "invalidConfig",
+  XRAY_TRAFFIC_UNCONFIRMED: "networkSetupFailed",
+  XRAY_EXITED: "networkSetupFailed",
   EXTERNAL_IP_UNAVAILABLE: "ipCheckFailed",
   EXTERNAL_IP_TLS_FAILED: "ipTlsFailed",
   EXTERNAL_IP_CA_UNAVAILABLE: "ipCaUnavailable",

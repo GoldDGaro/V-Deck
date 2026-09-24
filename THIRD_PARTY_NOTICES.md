@@ -1,6 +1,23 @@
 # Third-party notices and license audit
 
+## Xray — local experimental integration (2026-09-22)
+
+`bin/xray` is the official Linux amd64 Xray-core **26.3.27** executable, built upstream
+with Go 1.26.1, not locally rebuilt. Archive and binary SHA-256 are pinned in
+`backend/versions.json`; Docker fetches and verifies that exact archive.
+Xray-core is MPL-2.0, distributed as a separate process; see `licenses/Xray-MPL-2.0.txt`.
+Exact source commit `d2758a023cd7f4174a5a5fa4ff66e487d4342ba0` is included in the source ZIP
+under `third_party_src/xray-core`, with dependency versions in go.mod/go.sum.
+Upstream: https://github.com/XTLS/Xray-core/tree/v26.3.27.
+
 This audit applies to V-Deck 0.1.0. V-Deck's PolyForm license covers only original V-Deck code. Every component below keeps its own license. Source URLs identify the exact upstream; the release's adjacent corresponding-source archive contains the source used for bundled GPL executables, build recipes, and local build patches.
+
+## Premium API helper
+
+`premium-api` is original V-Deck code, independently implementing the documented-by-source
+gateway wire format. It is not linked to or copied from Amnezia's GPL client.
+Go 1.25.14 runtime/standard library notice: `licenses/Go-BSD-3-Clause.txt`.
+Build source and protocol provenance: `backend/premium/main.go` in the source archive.
 
 ## Shipped native executables
 

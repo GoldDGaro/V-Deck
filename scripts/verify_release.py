@@ -29,9 +29,13 @@ REQUIRED = {
     "V-Deck/bin/wireguard-go",
     "V-Deck/bin/wg",
     "V-Deck/bin/openvpn",
+    "V-Deck/bin/xray",
+    "V-Deck/bin/premium-api",
+    "V-Deck/py_modules/vdeck/premium.py",
+    "V-Deck/licenses/Go-BSD-3-Clause.txt",
 }
-NATIVE = ("amneziawg-go", "awg", "wireguard-go", "wg", "openvpn")
-FORBIDDEN_PARTS = {".git", "node_modules", "tests", "__pycache__", ".mypy_cache", ".ruff_cache"}
+NATIVE = ("amneziawg-go", "awg", "wireguard-go", "wg", "openvpn", "xray", "premium-api")
+FORBIDDEN_PARTS = {".git", "node_modules", "tests", "__pycache__", ".mypy_cache", ".ruff_cache", ".token-optimizer"}
 RUNTIME_FORBIDDEN = {
     "V-Deck/.dockerignore",
     "V-Deck/backend/Dockerfile",

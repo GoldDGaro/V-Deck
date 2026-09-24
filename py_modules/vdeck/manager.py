@@ -13,6 +13,7 @@ from .errors import VDeckError, ok
 from .logging_utils import ErrorHistory, safe_exception_details
 from .models import ConnectionState, DesiredState, PersistentState, RuntimeState
 from .network import FirewallManager, interface_name
+from .premium import PremiumManager
 from .storage import VDeckStore, utc_now
 
 
@@ -33,6 +34,7 @@ class VPNManager:
         self.lock = asyncio.Lock()
         self._recovery_task: asyncio.Task[None] | None = None
         self.network_revision = 0
+        self.premium: PremiumManager | None = None
 
     async def initialize(self) -> None:
         restart_connection_id: str | None = None
@@ -167,6 +169,8 @@ class VPNManager:
             self.store.save_runtime(runtime)
             backend = self.registry.get(metadata.protocol)
             try:
+                if self.premium:
+                    await self.premium.prepare(metadata)
                 status = await backend.start(metadata, runtime)
                 if not status.get("connected"):
                     raise VDeckError("BACKEND_NOT_CONNECTED", "The VPN backend did not confirm a connected tunnel")
@@ -373,6 +377,8 @@ class VPNManager:
                 backend = self.registry.get(metadata.protocol)
                 try:
                     await backend.stop(metadata, runtime)
+                    if self.premium:
+                        await self.premium.prepare(metadata, recovery=True)
                     if state.kill_switch:
                         # The interface name is deterministic, but cleanup has
                         # cleared runtime.interface. Permit the upcoming tunnel

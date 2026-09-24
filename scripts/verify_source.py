@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 REPOSITORIES = {
+    "xray-core": "LICENSE",
     "amneziawg-go": "LICENSE",
     "amneziawg-tools": "COPYING",
     "wireguard-go": "LICENSE",
@@ -16,6 +17,11 @@ REPOSITORIES = {
     "wolfssl": "COPYING",
 }
 PROJECT_REQUIRED = {
+    "V-Deck-source/V-Deck/backend/premium/main.go",
+    "V-Deck-source/V-Deck/backend/premium/main_test.go",
+    "V-Deck-source/V-Deck/backend/premium/transport.go",
+    "V-Deck-source/V-Deck/backend/premium/transport_test.go",
+    "V-Deck-source/V-Deck/backend/premium/go.mod",
     "V-Deck-source/V-Deck/backend/Dockerfile",
     "V-Deck-source/V-Deck/backend/README.md",
     "V-Deck-source/V-Deck/backend/versions.json",
@@ -29,7 +35,7 @@ PROJECT_REQUIRED = {
     "V-Deck-source/V-Deck/requirements-dev.txt",
     "V-Deck-source/V-Deck/SOURCE_OFFER.md",
 }
-FORBIDDEN_PARTS = {".git", "node_modules", "__pycache__", ".mypy_cache", ".ruff_cache"}
+FORBIDDEN_PARTS = {".git", "node_modules", "__pycache__", ".mypy_cache", ".ruff_cache", ".token-optimizer"}
 
 
 def verify(path: Path) -> None:

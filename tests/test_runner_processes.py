@@ -134,7 +134,8 @@ class RealChildProcessTests(unittest.IsolatedAsyncioTestCase):
             self.owned.append(owned)
             await asyncio.wait_for(self.runner._processes[owned.pid][1].wait(), 10)
             await self.runner.stop(owned)
-            text = path.read_text() + "\n".join(captured.output)
+            self.assertFalse(path.exists(), "Native output must only use the common daily logger")
+            text = "\n".join(captured.output)
             self.assertIn("auth_failed", text)
             self.assertIn("permission denied", text)
             for secret in ("arbitrary-unlabelled-password", "top-secret", "naked-private-key-material"):

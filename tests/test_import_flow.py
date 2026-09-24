@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from vdeck.logging_utils import daily_log_path
 from vdeck.service import VDeckService
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -57,7 +58,7 @@ class ImportFlowTests(unittest.IsolatedAsyncioTestCase):
 
                 for handler in service.logger.handlers:
                     handler.flush()
-                technical_log = (root / "logs" / "vdeck.log").read_text(encoding="utf-8")
+                technical_log = daily_log_path(root / "logs").read_text(encoding="utf-8")
                 for event in (
                     "file selected",
                     "protocol selected",
