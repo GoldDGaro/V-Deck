@@ -18,7 +18,7 @@ ARG WOLFSSL_COMMIT=ac01707f552c611fbd135cc723b2682b3e7f80f2
 
 RUN apk add --no-cache \
     autoconf=2.72-r1 automake=1.17-r1 bash=5.2.37-r0 \
-    binutils=2.44-r3 build-base=0.5-r3 ca-certificates=20260611-r0 \
+    binutils=2.44-r3 build-base=0.5-r3 ca-certificates=20260909-r0 \
     curl=8.14.1-r3 g++=14.2.0-r6 gcc=14.2.0-r6 git=2.49.1-r0 \
     libcap-ng=0.8.5-r0 libcap-ng-dev=0.8.5-r0 libcap-ng-static=0.8.5-r0 \
     libtool=2.5.4-r1 linux-headers=6.14.2-r0 m4=1.4.19-r4 \
